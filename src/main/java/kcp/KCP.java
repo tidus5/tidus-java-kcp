@@ -211,7 +211,7 @@ public abstract class KCP {
     // user/upper level recv: returns size, returns below zero for EAGAIN
     //---------------------------------------------------------------------
     // 将接收队列中的数据传递给上层引用
-    public int Recv(byte[] buffer) {
+    public int Recv(byte[] buffer) {//viewing
 
         if (0 == nrcv_que.size()) {
             return -1;
@@ -618,7 +618,7 @@ public abstract class KCP {
     //---------------------------------------------------------------------
     // ikcp_flush
     //---------------------------------------------------------------------
-    void flush() {
+    void flush() {//viewed
         long current_ = current;
         byte[] buffer_ = buffer;
         int change = 0;
@@ -827,7 +827,7 @@ public abstract class KCP {
     // ikcp_check when to call it again (without ikcp_input/_send calling).
     // 'current' - current timestamp in millisec.
     //---------------------------------------------------------------------
-    public void Update(long current_) {
+    public void Update(long current_) {//viewed
 
         current = current_;
 
