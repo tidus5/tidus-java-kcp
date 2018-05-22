@@ -2,7 +2,7 @@ package kcp;
 
 import java.util.ArrayList;
 
-public abstract class KCPCopy {
+public abs1tract class KCPCopy {
 
 
     //=====================================================================
@@ -189,6 +189,7 @@ public abstract class KCPCopy {
     long ssthresh = IKCP_THRESH_INIT;
     long fastresend = 0;
     long nocwnd = 0;
+    boolean stream = false;
     long xmit = 0;
     long dead_link = IKCP_DEADLINK;
     //long output = NULL;
@@ -198,6 +199,59 @@ public abstract class KCPCopy {
         conv = conv_;
     }
 
+
+
+
+    //---------------------------------------------------------------------
+    // user/upper level send, returns below zero for error
+    //---------------------------------------------------------------------
+    // 上层要发送的数据丢给发送队列，发送队列会根据mtu大小分片
+    public int Send(byte[] buffer) {
+
+
+        assert(mss > 0);
+
+        if (0 == buffer.length) {
+            return -1;
+        }
+
+        int count;
+        if(stream){
+            if(nrcv_que.sizde() >0){
+
+            }
+        }
+
+        // 根据mss大小分片
+        if (buffer.length < mss) {
+            count = 1;
+        } else {
+            count = (int) (buffer.length + mss - 1) / (int) mss;
+        }
+
+        if (255 < count) {
+            return -2;
+        }
+
+        if (0 == count) {
+            count = 1;
+        }
+
+        int offset = 0;
+
+        // 分片后加入到发送队列
+        int length = buffer.length;
+        for (int i = 0; i < count; i++) {
+            int size = (int) (length > mss ? mss : length);
+            Segment seg = new Segment(size);
+            System.arraycopy(buffer, offset, seg.data, 0, size);
+            offset += size;
+            seg.frg = count - i - 1;
+            nsnd_que.add(seg);
+            length -= size;
+        }
+        return 0;
+    }
 
 
 
