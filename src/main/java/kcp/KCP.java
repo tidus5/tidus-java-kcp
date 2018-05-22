@@ -278,7 +278,7 @@ public abstract class KCP {
     //---------------------------------------------------------------------
     // check the size of next message in the recv queue
     // 计算接收队列中有多少可用的数据
-    public int PeekSize() {
+    public int PeekSize() {//viewing
         if (0 == nrcv_que.size()) {
             return -1;
         }

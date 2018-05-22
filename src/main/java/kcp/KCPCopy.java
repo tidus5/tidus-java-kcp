@@ -198,6 +198,118 @@ public abstract class KCPCopy {
         conv = conv_;
     }
 
+    //////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    //---------------------------------------------------------------------
+    // user/upper level recv: returns size, returns below zero for EAGAIN
+    //---------------------------------------------------------------------
+    // 将接收队列中的数据传递给上层引用
+    public int Recv(byte[] buffer) {//viewing
+
+        if (0 == nrcv_que.size()) {
+            return -1;
+        }
+
+        int peekSize = PeekSize();
+        if (0 > peekSize) {
+            return -2;
+        }
+
+        if (peekSize > buffer.length) {
+            return -3;
+        }
+
+        boolean recover = false;
+        if (nrcv_que.size() >= rcv_wnd) {
+            recover = true;
+        }
+
+        // merge fragment.
+        int count = 0;
+        int n = 0;
+        for (Segment seg : nrcv_que) {
+            System.arraycopy(seg.data, 0, buffer, n, seg.data.length);
+            n += seg.data.length;
+            count++;
+
+//            if (ikcp_canlog(kcp, IKCP_LOG_RECV)) {
+//                ikcp_log(kcp, IKCP_LOG_RECV, "recv sn=%lu", seg->sn);
+//            }
+            if (0 == seg.frg) {
+                break;
+            }
+        }
+        assert(n == peekSize);
+
+        boolean ispeek = buffer.length < 0;
+        if(ispeek == false) {
+            //原版kcp这里判断，  是false 才删除
+        }
+        if (0 < count) {
+            slice(nrcv_que, count, nrcv_que.size());
+        }
+
+
+
+        // move available data from rcv_buf -> nrcv_que
+        count = 0;
+        for (Segment seg : nrcv_buf) {
+            if (seg.sn == rcv_nxt && nrcv_que.size() < rcv_wnd) {
+                nrcv_que.add(seg);
+                rcv_nxt++;
+                count++;
+            } else {
+                break;
+            }
+        }
+
+        if (0 < count) {
+            slice(nrcv_buf, count, nrcv_buf.size());
+        }
+
+        // fast recover
+        if (nrcv_que.size() < rcv_wnd && recover) {
+            // ready to send back IKCP_CMD_WINS in ikcp_flush
+            // tell remote my window size
+            probe |= IKCP_ASK_TELL;
+        }
+
+        return n;
+    }
+
+    //---------------------------------------------------------------------
+    // peek data size
+    //---------------------------------------------------------------------
+    // check the size of next message in the recv queue
+    // 计算接收队列中有多少可用的数据
+    public int PeekSize() {//viewing
+        if (0 == nrcv_que.size()) {
+            return -1;
+        }
+
+        Segment seq = nrcv_que.get(0);
+
+        if (0 == seq.frg) {
+            return seq.data.length;
+        }
+
+        if (nrcv_que.size() < seq.frg + 1) {
+            return -1;
+        }
+
+        int length = 0;
+
+        for (Segment item : nrcv_que) {
+            length += item.data.length;
+            if (0 == item.frg) {
+                break;
+            }
+        }
+
+        return length;
+    }
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 
 
 
