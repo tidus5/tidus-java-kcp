@@ -317,7 +317,7 @@ public abs1tract class KCPCopy {
     // user/upper level send, returns below zero for error
     //---------------------------------------------------------------------
     // 上层要发送的数据丢给发送队列，发送队列会根据mtu大小分片
-    public int Send(byte[] buffer) {
+    public int Send(byte[] buffer) {//viewing
 
 
         assert(mss > 0);
@@ -328,8 +328,31 @@ public abs1tract class KCPCopy {
 
         int count;
         if(stream){
-            if(nsnd_que.size() >0){
-                Segment seg = nsnd_que.get(nsnd_que.size() - 1);
+            if(nsnd_que.size() > 0){
+//                IKCPSEG *old = iqueue_entry(kcp->snd_queue.prev, IKCPSEG, node);
+                Segment old = nsnd_que.get(nsnd_que.size() - 1);
+                if (old.data.length < mss) {
+                    int capacity = (int) (mss - old.data.length);
+                    int extend = (buffer.length < capacity)? buffer.length : capacity;
+                    Segment seg = new Segment(old.data.length + extend);
+                    assert(seg != null);
+                    if (seg == null) {
+                        return -2;
+                    }
+
+                    nsnd_que.add(seg);
+                    System.arraycopy(old.data,0,seg.data,0,old.data.length);
+
+                    if (buffer!=null) {
+                        System.arraycopy(buffer,0,seg.data,old.data.length,buffer.length);
+                        //buffer += extend;
+                    }
+                    seg.data.length = old.data.length + extend;
+                    seg.frg = 0;
+                    len -= extend;
+                    iqueue_del_init(&old->node);
+                    ikcp_segment_delete(kcp, old);
+                }
             }
         }
 
