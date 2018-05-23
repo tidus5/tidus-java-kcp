@@ -205,7 +205,7 @@ public abs1tract class KCPCopy {
     // user/upper level recv: returns size, returns below zero for EAGAIN
     //---------------------------------------------------------------------
     // 将接收队列中的数据传递给上层引用
-    public int Recv(byte[] buffer) {//viewing
+    public int Recv(byte[] buffer) {//viewed
 
         if (0 == nrcv_que.size()) {
             return -1;
@@ -240,17 +240,16 @@ public abs1tract class KCPCopy {
                 break;
             }
         }
-        assert(n == peekSize);
 
         boolean ispeek = buffer.length < 0;
         if(ispeek == false) {
             //原版kcp这里判断，  是false 才删除
-        }
-        if (0 < count) {
-            slice(nrcv_que, count, nrcv_que.size());
+            if (0 < count) {
+                slice(nrcv_que, count, nrcv_que.size());
+            }
         }
 
-
+        assert(n == peekSize);
 
         // move available data from rcv_buf -> nrcv_que
         count = 0;
@@ -283,7 +282,7 @@ public abs1tract class KCPCopy {
     //---------------------------------------------------------------------
     // check the size of next message in the recv queue
     // 计算接收队列中有多少可用的数据
-    public int PeekSize() {//viewing
+    public int PeekSize() {//viewed
         if (0 == nrcv_que.size()) {
             return -1;
         }
@@ -329,8 +328,8 @@ public abs1tract class KCPCopy {
 
         int count;
         if(stream){
-            if(nrcv_que.sizde() >0){
-
+            if(nsnd_que.size() >0){
+                Segment seg = nsnd_que.get(nsnd_que.size() - 1);
             }
         }
 
