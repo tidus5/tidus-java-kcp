@@ -2,7 +2,7 @@ package kcp;
 
 import java.util.ArrayList;
 
-public abs1tract class KCPCopy {
+public abstract class KCPCopy {
 
 
     //=====================================================================
@@ -347,11 +347,11 @@ public abs1tract class KCPCopy {
                         System.arraycopy(buffer,0,seg.data,old.data.length,buffer.length);
                         //buffer += extend;
                     }
-                    seg.data.length = old.data.length + extend;
-                    seg.frg = 0;
-                    len -= extend;
-                    iqueue_del_init(&old->node);
-                    ikcp_segment_delete(kcp, old);
+//                    seg.data.length = old.data.length + extend;
+//                    seg.frg = 0;
+//                    len -= extend;
+//                    iqueue_del_init(&old->node);
+//                    ikcp_segment_delete(kcp, old);
                 }
             }
         }

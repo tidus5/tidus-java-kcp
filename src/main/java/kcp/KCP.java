@@ -11,9 +11,14 @@
 //=====================================================================
 package kcp;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 
 public abstract class KCP {
+
+    Logger logger = LoggerFactory.getLogger(KCP.class);
 
     //=====================================================================
     // KCP BASIC
@@ -159,7 +164,7 @@ public abstract class KCP {
         }
     }
 
-    long conv = 0;
+    public long conv = 0;
     //long user = user;
     long snd_una = 0;
     long snd_nxt = 0;
