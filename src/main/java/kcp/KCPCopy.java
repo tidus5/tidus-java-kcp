@@ -327,13 +327,15 @@ public abstract class KCPCopy {
         }
 
         int count;
+        int offset = 0;
+        int len = buffer.length;
         if(stream){
             if(nsnd_que.size() > 0){
 //                IKCPSEG *old = iqueue_entry(kcp->snd_queue.prev, IKCPSEG, node);
                 Segment old = nsnd_que.get(nsnd_que.size() - 1);
                 if (old.data.length < mss) {
                     int capacity = (int) (mss - old.data.length);
-                    int extend = (buffer.length < capacity)? buffer.length : capacity;
+                    int extend = (len < capacity)? len : capacity;
                     Segment seg = new Segment(old.data.length + extend);
                     assert(seg != null);
                     if (seg == null) {
@@ -344,23 +346,22 @@ public abstract class KCPCopy {
                     System.arraycopy(old.data,0,seg.data,0,old.data.length);
 
                     if (buffer!=null) {
-                        System.arraycopy(buffer,0,seg.data,old.data.length,buffer.length);
-                        //buffer += extend;
+                        System.arraycopy(buffer,offset,seg.data,old.data.length,buffer.length);
+                        offset += extend;
                     }
-//                    seg.data.length = old.data.length + extend;
-//                    seg.frg = 0;
-//                    len -= extend;
-//                    iqueue_del_init(&old->node);
-//                    ikcp_segment_delete(kcp, old);
+                    len -= extend;
+                    nsnd_que.remove(nsnd_que.size()-1);
                 }
             }
+            if(len <= 0)
+                return 0;
         }
 
         // 根据mss大小分片
-        if (buffer.length < mss) {
+        if (len <= mss) {
             count = 1;
         } else {
-            count = (int) (buffer.length + mss - 1) / (int) mss;
+            count = (int) (len + mss - 1) / (int) mss;
         }
 
         if (255 < count) {
@@ -371,26 +372,374 @@ public abstract class KCPCopy {
             count = 1;
         }
 
-        int offset = 0;
+        offset = 0;
 
         // 分片后加入到发送队列
         int length = buffer.length;
         for (int i = 0; i < count; i++) {
             int size = (int) (length > mss ? mss : length);
             Segment seg = new Segment(size);
-            System.arraycopy(buffer, offset, seg.data, 0, size);
-            offset += size;
-            seg.frg = count - i - 1;
+            if(buffer != null && len > 0)
+                System.arraycopy(buffer, offset, seg.data, 0, size);
+            seg.frg =(this.stream == false)? (count - i - 1) : 0;
             nsnd_que.add(seg);
+            offset += size;
             length -= size;
         }
+
         return 0;
     }
 
 
+    //---------------------------------------------------------------------
+    // parse ack
+    //---------------------------------------------------------------------
+    void update_ack(int rtt) {
+        if (0 == rx_srtt) {
+            rx_srtt = rtt;
+            rx_rttval = rtt / 2;
+        } else {
+            int delta = (int) (rtt - rx_srtt);
+            if (0 > delta) {
+                delta = -delta;
+            }
+
+            rx_rttval = (3 * rx_rttval + delta) / 4;
+            rx_srtt = (7 * rx_srtt + rtt) / 8;
+            if (rx_srtt < 1) {
+                rx_srtt = 1;
+            }
+        }
+
+        int rto = (int) (rx_srtt + _imax_(1, 4 * rx_rttval));
+        rx_rto = _ibound_(rx_minrto, rto, IKCP_RTO_MAX);
+    }
+
+    // 计算本地真实snd_una
+    void shrink_buf() {
+        if (nsnd_buf.size() > 0) {
+            snd_una = nsnd_buf.get(0).sn;
+        } else {
+            snd_una = snd_nxt;
+        }
+    }
+
+    // 对端返回的ack, 确认发送成功时，对应包从发送缓存中移除
+    void parse_ack(long sn) {
+        if (_itimediff(sn, snd_una) < 0 || _itimediff(sn, snd_nxt) >= 0) {
+            return;
+        }
+
+        int index = 0;
+        for (Segment seg : nsnd_buf) {
+            if (sn == seg.sn) {
+                nsnd_buf.remove(index);
+                break;
+            }
+            index++;
+            if (_itimediff(sn, seg.sn) < 0) {
+                break;
+            }
+        }
+    }
+
+    // 通过对端传回的una将已经确认发送成功包从发送缓存中移除
+    void parse_una(long una) {
+        int count = 0;
+        for (Segment seg : nsnd_buf) {
+            if (_itimediff(una, seg.sn) > 0) {
+                count++;
+            } else {
+                break;
+            }
+        }
+
+        if (0 < count) {
+            slice(nsnd_buf, count, nsnd_buf.size());
+        }
+    }
+
+    void parse_fastack(long sn) {
+        if (_itimediff(sn, snd_una) < 0 || _itimediff(sn, snd_nxt) >= 0) {
+            return;
+        }
+
+        int index = 0;
+        for (Segment seg : nsnd_buf) {
+            if (_itimediff(sn, seg.sn) < 0) {
+                break;
+            }else if (sn != seg.sn) {
+                seg.fastack++;
+            }
+        }
+    }
+
+    //---------------------------------------------------------------------
+    // ack append
+    //---------------------------------------------------------------------
+    // 收数据包后需要给对端回ack，flush时发送出去
+    void ack_push(long sn, long ts) {
+        //TODO 原版进行了扩容
+        // c原版实现中按*2扩大容量
+        acklist.add(sn);
+        acklist.add(ts);
+    }
 
 
+//    static void ikcp_ack_push(ikcpcb *kcp, IUINT32 sn, IUINT32 ts)
+//    {
+//        size_t newsize = kcp->ackcount + 1;
+//        IUINT32 *ptr;
+//
+//        if (newsize > kcp->ackblock) {
+//            IUINT32 *acklist;
+//            size_t newblock;
+//
+//            for (newblock = 8; newblock < newsize; newblock <<= 1);
+//            acklist = (IUINT32*)ikcp_malloc(newblock * sizeof(IUINT32) * 2);
+//
+//            if (acklist == NULL) {
+//                assert(acklist != NULL);
+//                abort();
+//            }
+//
+//            if (kcp->acklist != NULL) {
+//                size_t x;
+//                for (x = 0; x < kcp->ackcount; x++) {
+//                    acklist[x * 2 + 0] = kcp->acklist[x * 2 + 0];
+//                    acklist[x * 2 + 1] = kcp->acklist[x * 2 + 1];
+//                }
+//                ikcp_free(kcp->acklist);
+//            }
+//
+//            kcp->acklist = acklist;
+//            kcp->ackblock = newblock;
+//        }
+//
+//        ptr = &kcp->acklist[kcp->ackcount * 2];
+//        ptr[0] = sn;
+//        ptr[1] = ts;
+//        kcp->ackcount++;
+//    }
+//
+//    static void ikcp_ack_get(const ikcpcb *kcp, int p, IUINT32 *sn, IUINT32 *ts)
+//    {
+//        if (sn) sn[0] = kcp->acklist[p * 2 + 0];
+//        if (ts) ts[0] = kcp->acklist[p * 2 + 1];
+//    }
+//
 
+    //---------------------------------------------------------------------
+    // parse data
+    //---------------------------------------------------------------------
+    // 用户数据包解析
+    void parse_data(Segment newseg) {
+        long sn = newseg.sn;
+        boolean repeat = false;
+
+        if (_itimediff(sn, rcv_nxt + rcv_wnd) >= 0 || _itimediff(sn, rcv_nxt) < 0) {
+            return;
+        }
+
+        int n = nrcv_buf.size() - 1;
+        int after_idx = -1;
+
+        // 判断是否是重复包，并且计算插入位置
+        for (int i = n; i >= 0; i--) {
+            Segment seg = nrcv_buf.get(i);
+            if (seg.sn == sn) {
+                repeat = true;
+                break;
+            }
+
+            if (_itimediff(sn, seg.sn) > 0) {
+                after_idx = i;
+                break;
+            }
+        }
+
+        // 如果不是重复包，则插入
+        if (!repeat) {
+            if (after_idx == -1) {
+                nrcv_buf.add(0, newseg);
+            } else {
+                nrcv_buf.add(after_idx + 1, newseg);
+            }
+        }
+
+        // move available data from nrcv_buf -> nrcv_que
+        // 将连续包加入到接收队列
+        int count = 0;
+        for (Segment seg : nrcv_buf) {
+            if (seg.sn == rcv_nxt && nrcv_que.size() < rcv_wnd) {
+                nrcv_que.add(seg);
+                rcv_nxt++;
+                count++;
+            } else {
+                break;
+            }
+        }
+
+        // 从接收缓存中移除
+        if (0 < count) {
+            slice(nrcv_buf, count, nrcv_buf.size());
+        }
+    }
+
+    // when you received a low level packet (eg. UDP packet), call it
+    //---------------------------------------------------------------------
+    // input data
+    //---------------------------------------------------------------------
+    // 底层收包后调用，再由上层通过Recv获得处理后的数据
+    public int Input(byte[] data) {
+
+        boolean flag = false;
+        long maxack = 0;
+
+//        if (ikcp_canlog(kcp, IKCP_LOG_INPUT)) {
+//            ikcp_log(kcp, IKCP_LOG_INPUT, "[RI] %d bytes", size);
+//        }
+
+        long s_una = snd_una;
+        if(data == null || data.length < IKCP_OVERHEAD) {
+            return -1;
+        }
+
+        int offset = 0;
+
+        while (true) {
+            long ts, sn, length, una, conv_;
+            int wnd;
+            byte cmd, frg;
+
+            if (data.length - offset < IKCP_OVERHEAD) {
+                break;
+            }
+
+            conv_ = ikcp_decode32u(data, offset);
+            offset += 4;
+            if (conv != conv_) {
+                return -1;
+            }
+
+            cmd = ikcp_decode8u(data, offset);
+            offset += 1;
+            frg = ikcp_decode8u(data, offset);
+            offset += 1;
+            wnd = ikcp_decode16u(data, offset);
+            offset += 2;
+            ts = ikcp_decode32u(data, offset);
+            offset += 4;
+            sn = ikcp_decode32u(data, offset);
+            offset += 4;
+            una = ikcp_decode32u(data, offset);
+            offset += 4;
+            length = ikcp_decode32u(data, offset);
+            offset += 4;
+
+            if (data.length - offset < length) {
+                return -2;
+            }
+
+            if (cmd != IKCP_CMD_PUSH && cmd != IKCP_CMD_ACK && cmd != IKCP_CMD_WASK && cmd != IKCP_CMD_WINS) {
+                return -3;
+            }
+
+            rmt_wnd = (long) wnd;
+            parse_una(una);
+            shrink_buf();
+
+            if (IKCP_CMD_ACK == cmd) {
+                if (_itimediff(current, ts) >= 0) {
+                    update_ack(_itimediff(current, ts));
+                }
+                parse_ack(sn);
+                shrink_buf();
+                if (flag == false) {
+                    flag = true;
+                    maxack = sn;
+                }	else {
+                    if (_itimediff(sn, maxack) > 0) {
+                        maxack = sn;
+                    }
+                }
+//                if (ikcp_canlog(kcp, IKCP_LOG_IN_ACK)) {
+//                    ikcp_log(kcp, IKCP_LOG_IN_DATA,
+//                            "input ack: sn=%lu rtt=%ld rto=%ld", sn,
+//                            (long)_itimediff(kcp->current, ts),
+//                            (long)kcp->rx_rto);
+//                }
+            } else if (IKCP_CMD_PUSH == cmd) {
+//                if (ikcp_canlog(kcp, IKCP_LOG_IN_DATA)) {
+//                    ikcp_log(kcp, IKCP_LOG_IN_DATA,
+//                            "input psh: sn=%lu ts=%lu", sn, ts);
+//                }
+                if (_itimediff(sn, rcv_nxt + rcv_wnd) < 0) {
+                    ack_push(sn, ts);
+                    if (_itimediff(sn, rcv_nxt) >= 0) {
+                        Segment seg = new Segment((int) length);
+                        seg.conv = conv_;
+                        seg.cmd = cmd;
+                        seg.frg = frg;
+                        seg.wnd = wnd;
+                        seg.ts = ts;
+                        seg.sn = sn;
+                        seg.una = una;
+
+                        if (length > 0) {
+                            System.arraycopy(data, offset, seg.data, 0, (int) length);
+                        }
+
+                        parse_data(seg);
+                    }
+                }
+            } else if (IKCP_CMD_WASK == cmd) {
+                // ready to send back IKCP_CMD_WINS in Ikcp_flush
+                // tell remote my window size
+                probe |= IKCP_ASK_TELL;
+//                if (ikcp_canlog(kcp, IKCP_LOG_IN_PROBE)) {
+//                    ikcp_log(kcp, IKCP_LOG_IN_PROBE, "input probe");
+//                }
+            } else if (IKCP_CMD_WINS == cmd) {
+                // do nothing
+//                if (ikcp_canlog(kcp, IKCP_LOG_IN_WINS)) {
+//                    ikcp_log(kcp, IKCP_LOG_IN_WINS,
+//                            "input wins: %lu", (IUINT32)(wnd));
+//                }
+            } else {
+                return -3;
+            }
+
+            offset += (int) length;
+        }
+        if (flag != false) {
+            parse_fastack(maxack);
+        }
+
+        if (_itimediff(snd_una, s_una) > 0) {
+            if (cwnd < rmt_wnd) {
+                long mss_ = mss;
+                if (cwnd < ssthresh) {
+                    cwnd++;
+                    incr += mss_;
+                } else {
+                    if (incr < mss_) {
+                        incr = mss_;
+                    }
+                    incr += (mss_ * mss_) / incr + (mss_ / 16);
+                    if ((cwnd + 1) * mss_ <= incr) {
+                        cwnd++;
+                    }
+                }
+                if (cwnd > rmt_wnd) {
+                    cwnd = rmt_wnd;
+                    incr = rmt_wnd * mss_;
+                }
+            }
+        }
+
+        return 0;
+    }
 
 
     // 接收窗口可用大小

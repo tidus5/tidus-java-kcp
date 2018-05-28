@@ -1,4 +1,4 @@
-package nettyKcpTest;
+package nettyUdpExample;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;

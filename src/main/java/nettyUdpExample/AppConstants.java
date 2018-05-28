@@ -1,4 +1,4 @@
-package nettyKcpTest;
+package nettyUdpExample;
 
 public class AppConstants {
 
