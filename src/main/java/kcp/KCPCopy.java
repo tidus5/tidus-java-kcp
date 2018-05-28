@@ -712,7 +712,7 @@ public abstract class KCPCopy {
 
             offset += (int) length;
         }
-        if (flag != false) {
+        if (flag == true) {
             parse_fastack(maxack);
         }
 
@@ -987,4 +987,128 @@ public abstract class KCPCopy {
             flush();
         }
     }
+
+
+
+    //---------------------------------------------------------------------
+    // Determine when should you invoke ikcp_update:
+    // returns when you should invoke ikcp_update in millisec, if there
+    // is no ikcp_input/_send calling. you can call ikcp_update in that
+    // time, instead of call update repeatly.
+    // Important to reduce unnacessary ikcp_update invoking. use it to
+    // schedule ikcp_update (eg. implementing an epoll-like mechanism,
+    // or optimize ikcp_update when handling massive kcp connections)
+    //---------------------------------------------------------------------
+    long ikcp_check(long current)
+    {
+        long ts_flush = this.ts_flush;
+        long tm_flush = 0x7fffffff;
+        long tm_packet = 0x7fffffff;
+        long minimal = 0;
+        //struct IQUEUEHEAD *p;
+
+        if (updated == 0) {
+            return current;
+        }
+
+        if (_itimediff(current, ts_flush) >= 10000 ||
+                _itimediff(current, ts_flush) < -10000) {
+            ts_flush = current;
+        }
+
+        if (_itimediff(current, ts_flush) >= 0) {
+            return current;
+        }
+
+        tm_flush = _itimediff(ts_flush, current);
+
+        for (Segment seg : nsnd_buf) {
+            long diff = _itimediff(seg.resendts, current);
+            if (diff <= 0) {
+                return current;
+            }
+            if (diff < tm_packet) tm_packet = diff;
+        }
+
+        minimal = (long)(tm_packet < tm_flush ? tm_packet : tm_flush);
+        if (minimal >= interval) minimal = interval;
+
+        return current + minimal;
+    }
+
+
+
+
+    int ikcp_setmtu(int mtu)
+    {
+        if (mtu < 50 || mtu < (int)IKCP_OVERHEAD)
+            return -1;
+        this.mtu = mtu;
+        mss = mtu - IKCP_OVERHEAD;
+        byte[] buffer = new byte[(int) (mtu + IKCP_OVERHEAD) * 3];
+        if (buffer == null)
+            return -2;
+        return 0;
+    }
+
+    int ikcp_interval(int interval)
+    {
+        if (interval > 5000) interval = 5000;
+        else if (interval < 10) interval = 10;
+        this.interval = interval;
+        return 0;
+    }
+
+    int ikcp_nodelay(int nodelay, int interval, int resend, int nc)
+    {
+        if (nodelay >= 0) {
+            this.nodelay = nodelay;
+            if (nodelay != 0) {
+                this.rx_minrto = IKCP_RTO_NDL;
+            }
+            else {
+                this.rx_minrto = IKCP_RTO_MIN;
+            }
+        }
+        if (interval >= 0) {
+            if (interval > 5000) interval = 5000;
+            else if (interval < 10) interval = 10;
+            this.interval = interval;
+        }
+        if (resend >= 0) {
+            this.fastresend = resend;
+        }
+        if (nc >= 0) {
+            this.nocwnd = nc;
+        }
+        return 0;
+    }
+
+
+    int ikcp_wndsize(int sndwnd, int rcvwnd)
+    {
+        if (sndwnd > 0) {
+            this.snd_wnd = sndwnd;
+        }
+        if (rcvwnd > 0) {   // must >= max fragment size
+            this.rcv_wnd = _imax_(rcvwnd, IKCP_WND_RCV);
+        }
+        return 0;
+    }
+
+    int ikcp_waitsnd()
+    {
+        return this.nsnd_buf.size() + this.nsnd_que.size();
+    }
+
+
+    // read conv
+    long ikcp_getconv(byte[] data, int offset)
+    {
+        long conv_ = ikcp_decode32u(data, offset);
+        return conv;
+    }
+
+
+
 }
