@@ -228,7 +228,7 @@ public abstract class KCPC {
     ArrayList<Segment> rcv_queue;
     ArrayList<Segment> snd_buf;
     ArrayList<Segment> rcv_buf;
-    ArrayList<Long> acklist;
+    List<Long> acklist;
     //long ackcount = 0;    //用于计算 acklist 当前长度和可容纳长度的，java不需要
     //long ackblock = 0;
     Object user;
@@ -270,7 +270,7 @@ public abstract class KCPC {
         this.nrcv_que = 0;
         this.nsnd_que = 0;
         this.state = 0;
-        this.acklist = new ArrayList<>(128);
+        this.acklist = new ArrayList<>(8);
         //this.ackcount = 0;
         //this.ackblock = 0;
         this.rx_srtt = 0;
