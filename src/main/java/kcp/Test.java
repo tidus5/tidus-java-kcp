@@ -1,10 +1,15 @@
 package kcp;
 
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 
 public class Test {
     public static void main(String[] args) {
+
+        System.out.println(ByteOrder.nativeOrder());
+
+
 
         log(1,2);
 

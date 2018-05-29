@@ -49,6 +49,7 @@ public abstract class KCPC {
 
     protected abstract int output(byte[] buffer, int size); // 需具体实现
 
+    //采用小端编码： https://github.com/skywind3000/kcp/issues/53
     // encode 8 bits unsigned int
     public static void ikcp_encode8u(byte[] p, int offset, byte c) {
         p[0 + offset] = c;
@@ -61,32 +62,33 @@ public abstract class KCPC {
 
     /* encode 16 bits unsigned int (msb) */
     public static void ikcp_encode16u(byte[] p, int offset, int w) {
-        p[offset + 0] = (byte) (w >> 8);
-        p[offset + 1] = (byte) (w >> 0);
+        p[offset + 0] = (byte)(w & 0xff);
+        p[offset + 1] = (byte)((w >>> 8) & 0xff);
     }
 
     /* decode 16 bits unsigned int (msb) */
     public static int ikcp_decode16u(byte[] p, int offset) {
-        int ret = (p[offset + 0] & 0xFF) << 8
-                | (p[offset + 1] & 0xFF);
-        return ret;
+        int x1 = ((int)p[offset + 0]) & 0xff;
+        int x2 = ((int)p[offset + 1]) & 0xff;
+        return ((x2 << 8) | x1) & 0xffff;
     }
 
     /* encode 32 bits unsigned int (msb) */
     public static void ikcp_encode32u(byte[] p, int offset, long l) {
-        p[offset + 0] = (byte) (l >> 24);
-        p[offset + 1] = (byte) (l >> 16);
-        p[offset + 2] = (byte) (l >> 8);
-        p[offset + 3] = (byte) (l >> 0);
+        p[offset + 0] = (byte)(l & 0xff);
+        p[offset + 1] = (byte)((l >>> 8) & 0xff);
+        p[offset + 2] = (byte)((l >>> 16) & 0xff);
+        p[offset + 3] = (byte)((l >>> 24) & 0xff);
     }
 
     /* decode 32 bits unsigned int (msb) */
     public static long ikcp_decode32u(byte[] p, int offset) {
-        long ret = (p[offset + 0] & 0xFFL) << 24
-                | (p[offset + 1] & 0xFFL) << 16
-                | (p[offset + 2] & 0xFFL) << 8
-                | p[offset + 3] & 0xFFL;
-        return ret;
+        int x1 = ((int)p[offset + 0]) & 0xff;
+        int x2 = ((int)p[offset + 1]) & 0xff;
+        int x3 = ((int)p[offset + 2]) & 0xff;
+        int x4 = ((int)p[offset + 3]) & 0xff;
+        int x5 = (x1) | (x2 << 8) | (x3 << 16) | (x4 << 24);
+        return ((long)x5) & 0xffffffff;
     }
 
     /**
@@ -259,13 +261,15 @@ public abstract class KCPC {
     byte[] buffer = new byte[(int) (mtu + IKCP_OVERHEAD) * 3];
     long fastresend = 0;
     long nocwnd = 0;
-    boolean stream = false;
+    int stream = 0;
     int logmask = 0;
     //long ikcp_output = NULL;
     //long writelog = NULL;
 
-    public KCPC(long conv_) {
-        conv = conv_;
+    public KCPC(long conv, Object user) {
+        this.conv = conv;
+        this.user = user;
+
     }
 
     //////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -274,7 +278,11 @@ public abstract class KCPC {
     // user/upper level recv: returns size, returns below zero for EAGAIN
     //---------------------------------------------------------------------
     // 将接收队列中的数据传递给上层引用
-    public int Recv(byte[] buffer) {//viewed
+    public int Recv(byte[] buffer, int len) {
+
+        boolean ispeek = len < 0;
+        if (len < 0)
+            len = -len;
 
         if (0 == nrcv_que.size()) {
             return -1;
@@ -285,7 +293,7 @@ public abstract class KCPC {
             return -2;
         }
 
-        if (peekSize > buffer.length) {
+        if (peekSize > len) {
             return -3;
         }
 
@@ -296,29 +304,32 @@ public abstract class KCPC {
 
         // merge fragment.
         int count = 0;
-        int n = 0;
+        int inputLen = 0;
         for (Segment seg : nrcv_que) {
-            System.arraycopy(seg.data, 0, buffer, n, seg.data.length);
-            n += seg.data.length;
+            if(buffer != null) {
+                System.arraycopy(seg.data, 0, buffer, inputLen, seg.data.length);
+            }
+
+            inputLen += seg.data.length;
             count++;
 
-//            if (ikcp_canlog(kcp, IKCP_LOG_RECV)) {
-//                ikcp_log(kcp, IKCP_LOG_RECV, "recv sn=%lu", seg->sn);
-//            }
+            if (ikcp_canlog(IKCP_LOG_RECV) != 0) {
+                ikcp_log(IKCP_LOG_RECV, "recv sn=%lu", seg.sn);
+            }
             if (0 == seg.frg) {
                 break;
             }
         }
 
-        boolean ispeek = buffer.length < 0;
+
         if(ispeek == false) {
-            //原版kcp这里判断，  是false 才删除
+            //非peek，代表需要移除
             if (0 < count) {
                 slice(nrcv_que, count, nrcv_que.size());
             }
         }
 
-        assert(n == peekSize);
+        assert(inputLen == peekSize);
 
         // move available data from rcv_buf -> nrcv_que
         count = 0;
@@ -343,7 +354,7 @@ public abstract class KCPC {
             probe |= IKCP_ASK_TELL;
         }
 
-        return n;
+        return inputLen;
     }
 
     //---------------------------------------------------------------------
@@ -398,7 +409,7 @@ public abstract class KCPC {
         int count;
         int offset = 0;
         int len = buffer.length;
-        if(stream){
+        if(stream != 0){
             if(nsnd_que.size() > 0){
 //                IKCPSEG *old = iqueue_entry(kcp->snd_queue.prev, IKCPSEG, node);
                 Segment old = nsnd_que.get(nsnd_que.size() - 1);
@@ -450,7 +461,7 @@ public abstract class KCPC {
             Segment seg = new Segment(size);
             if(buffer != null && len > 0)
                 System.arraycopy(buffer, offset, seg.data, 0, size);
-            seg.frg =(this.stream == false)? (count - i - 1) : 0;
+            seg.frg =(this.stream == 0)? (count - i - 1) : 0;
             nsnd_que.add(seg);
             offset += size;
             length -= size;
@@ -548,55 +559,10 @@ public abstract class KCPC {
     //---------------------------------------------------------------------
     // 收数据包后需要给对端回ack，flush时发送出去
     void ack_push(long sn, long ts) {
-        //TODO 原版进行了扩容
-        // c原版实现中按*2扩大容量
+        // c原版实现中数组按*2扩大容量，arrayList自动扩容，不需要考虑这个
         acklist.add(sn);
         acklist.add(ts);
     }
-
-
-//    static void ikcp_ack_push(ikcpcb *kcp, IUINT32 sn, IUINT32 ts)
-//    {
-//        size_t newsize = kcp->ackcount + 1;
-//        IUINT32 *ptr;
-//
-//        if (newsize > kcp->ackblock) {
-//            IUINT32 *acklist;
-//            size_t newblock;
-//
-//            for (newblock = 8; newblock < newsize; newblock <<= 1);
-//            acklist = (IUINT32*)ikcp_malloc(newblock * sizeof(IUINT32) * 2);
-//
-//            if (acklist == NULL) {
-//                assert(acklist != NULL);
-//                abort();
-//            }
-//
-//            if (kcp->acklist != NULL) {
-//                size_t x;
-//                for (x = 0; x < kcp->ackcount; x++) {
-//                    acklist[x * 2 + 0] = kcp->acklist[x * 2 + 0];
-//                    acklist[x * 2 + 1] = kcp->acklist[x * 2 + 1];
-//                }
-//                ikcp_free(kcp->acklist);
-//            }
-//
-//            kcp->acklist = acklist;
-//            kcp->ackblock = newblock;
-//        }
-//
-//        ptr = &kcp->acklist[kcp->ackcount * 2];
-//        ptr[0] = sn;
-//        ptr[1] = ts;
-//        kcp->ackcount++;
-//    }
-//
-//    static void ikcp_ack_get(const ikcpcb *kcp, int p, IUINT32 *sn, IUINT32 *ts)
-//    {
-//        if (sn) sn[0] = kcp->acklist[p * 2 + 0];
-//        if (ts) ts[0] = kcp->acklist[p * 2 + 1];
-//    }
-//
 
     //---------------------------------------------------------------------
     // parse data
@@ -660,17 +626,17 @@ public abstract class KCPC {
     // input data
     //---------------------------------------------------------------------
     // 底层收包后调用，再由上层通过Recv获得处理后的数据
-    public int Input(byte[] data) {
+    public int Input(byte[] data, int size) {
 
         boolean flag = false;
         long maxack = 0;
 
-//        if (ikcp_canlog(kcp, IKCP_LOG_INPUT)) {
-//            ikcp_log(kcp, IKCP_LOG_INPUT, "[RI] %d bytes", size);
-//        }
+        if (ikcp_canlog(IKCP_LOG_INPUT) != 0) {
+            ikcp_log(IKCP_LOG_INPUT, "[RI] %d bytes", size);
+        }
 
         long s_una = snd_una;
-        if(data == null || data.length < IKCP_OVERHEAD) {
+        if(data == null || size < IKCP_OVERHEAD) {
             return -1;
         }
 
@@ -681,7 +647,7 @@ public abstract class KCPC {
             int wnd;
             byte cmd, frg;
 
-            if (data.length - offset < IKCP_OVERHEAD) {
+            if (size - offset < IKCP_OVERHEAD) {
                 break;
             }
 
@@ -732,17 +698,16 @@ public abstract class KCPC {
                         maxack = sn;
                     }
                 }
-//                if (ikcp_canlog(kcp, IKCP_LOG_IN_ACK)) {
-//                    ikcp_log(kcp, IKCP_LOG_IN_DATA,
-//                            "input ack: sn=%lu rtt=%ld rto=%ld", sn,
-//                            (long)_itimediff(kcp->current, ts),
-//                            (long)kcp->rx_rto);
-//                }
+                if (ikcp_canlog(IKCP_LOG_IN_ACK) != 0) {
+                    ikcp_log(IKCP_LOG_IN_DATA,
+                            "input ack: sn=%lu rtt=%ld rto=%ld", sn,
+                            (long)_itimediff(this.current, ts),
+                            (long)this.rx_rto);
+                }
             } else if (IKCP_CMD_PUSH == cmd) {
-//                if (ikcp_canlog(kcp, IKCP_LOG_IN_DATA)) {
-//                    ikcp_log(kcp, IKCP_LOG_IN_DATA,
-//                            "input psh: sn=%lu ts=%lu", sn, ts);
-//                }
+                if (ikcp_canlog(IKCP_LOG_IN_DATA) != 0) {
+                    ikcp_log(IKCP_LOG_IN_DATA,"input psh: sn=%lu ts=%lu", sn, ts);
+                }
                 if (_itimediff(sn, rcv_nxt + rcv_wnd) < 0) {
                     ack_push(sn, ts);
                     if (_itimediff(sn, rcv_nxt) >= 0) {
@@ -766,15 +731,14 @@ public abstract class KCPC {
                 // ready to send back IKCP_CMD_WINS in Ikcp_flush
                 // tell remote my window size
                 probe |= IKCP_ASK_TELL;
-//                if (ikcp_canlog(kcp, IKCP_LOG_IN_PROBE)) {
-//                    ikcp_log(kcp, IKCP_LOG_IN_PROBE, "input probe");
-//                }
+                if (ikcp_canlog(IKCP_LOG_IN_PROBE) != 0) {
+                    ikcp_log(IKCP_LOG_IN_PROBE, "input probe");
+                }
             } else if (IKCP_CMD_WINS == cmd) {
                 // do nothing
-//                if (ikcp_canlog(kcp, IKCP_LOG_IN_WINS)) {
-//                    ikcp_log(kcp, IKCP_LOG_IN_WINS,
-//                            "input wins: %lu", (IUINT32)(wnd));
-//                }
+                if (ikcp_canlog(IKCP_LOG_IN_WINS) != 0) {
+                    ikcp_log(IKCP_LOG_IN_WINS,"input wins: %lu", (long)(wnd));
+                }
             } else {
                 return -3;
             }

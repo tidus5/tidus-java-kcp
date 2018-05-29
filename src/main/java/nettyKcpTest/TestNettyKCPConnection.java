@@ -30,7 +30,7 @@ public class TestNettyKCPConnection {
 
 		targetAddress = new InetSocketAddress(targetIp, targetPort);
 
-		kcp = new KCPC(conversationId) {
+		kcp = new KCPC(conversationId, null) {
 			// 设置发送消息底层方法
 			@Override protected int output(byte[] buffer, int size) {
 				//根据回话id， 找到目标channel
@@ -57,7 +57,7 @@ public class TestNettyKCPConnection {
 					int len = datagramPacket.content().readableBytes();
 					byte[] arr = new byte[len];
 					datagramPacket.content().getBytes(0, arr);
-					kcp.Input(arr);
+					kcp.Input(arr, len);
 				}}catch (Exception e){
 					e.printStackTrace();
 				}
@@ -78,7 +78,7 @@ public class TestNettyKCPConnection {
 	}
 
 	public void checkMessageRecieved(){
-		int len = kcp.Recv(data);
+		int len = kcp.Recv(data, data.length);
 		if (len > 0) {
 			String str = new String(data, 0, len, CharsetUtil.UTF_8);
 			System.out.println("收到：" + str);
