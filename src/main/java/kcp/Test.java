@@ -6,6 +6,8 @@ import java.util.List;
 public class Test {
     public static void main(String[] args) {
 
+        log(1,2);
+
         ArrayList list = new ArrayList<Integer>();
 
         for (int i = 0; i < 10; i++)
@@ -14,6 +16,11 @@ public class Test {
         slice(list, 5, 8);
 
         System.out.println(list);
+    }
+
+    public static void log(Object... args){
+        String str = String.format(" %d %d", args);
+        System.out.println(str);
     }
 
     public static void slice(ArrayList list, int start, int stop) {

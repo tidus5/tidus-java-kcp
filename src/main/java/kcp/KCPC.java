@@ -1,9 +1,12 @@
 package kcp;
 
 import java.util.ArrayList;
+import java.util.List;
 
-public abstract class KCPCopy {
+public abstract class KCPC {
 
+    //参考 https://github.com/hkspirt/kcp-java进行修改。
+    //更注重贴近原版kcp，作为java基础版本对照
 
     //=====================================================================
     // KCP BASIC
@@ -19,7 +22,7 @@ public abstract class KCPCopy {
     public final int IKCP_ASK_SEND = 1;   // need to send IKCP_CMD_WASK
     public final int IKCP_ASK_TELL = 2;   // need to send IKCP_CMD_WINS
     public final int IKCP_WND_SND = 32;
-    public final int IKCP_WND_RCV = 32;
+    public final int IKCP_WND_RCV = 128;  // must >= max fragment size
     public final int IKCP_MTU_DEF = 1400;
     public final int IKCP_ACK_FAST = 3;
     public final int IKCP_INTERVAL = 100;
@@ -29,8 +32,22 @@ public abstract class KCPCopy {
     public final int IKCP_THRESH_MIN = 2;
     public final int IKCP_PROBE_INIT = 7000;    // 7 secs to probe window size
     public final int IKCP_PROBE_LIMIT = 120000; // up to 120 secs to probe window
+    
+    
+    public final int IKCP_LOG_OUTPUT    = 1;
+    public final int IKCP_LOG_INPUT     = 2;
+    public final int IKCP_LOG_SEND      = 4;
+    public final int IKCP_LOG_RECV      = 8;
+    public final int IKCP_LOG_IN_DATA   = 16;
+    public final int IKCP_LOG_IN_ACK    = 32;
+    public final int IKCP_LOG_IN_PROBE  = 64;
+    public final int IKCP_LOG_IN_WINS   = 128;
+    public final int IKCP_LOG_OUT_DATA  = 256;
+    public final int IKCP_LOG_OUT_ACK   = 512;
+    public final int IKCP_LOG_OUT_PROBE = 1024;
+    public final int IKCP_LOG_OUT_WINS  = 2048;
 
-    protected abstract void output(byte[] buffer, int size); // 需具体实现
+    protected abstract int output(byte[] buffer, int size); // 需具体实现
 
     // encode 8 bits unsigned int
     public static void ikcp_encode8u(byte[] p, int offset, byte c) {
@@ -102,6 +119,50 @@ public abstract class KCPCopy {
         return ((int) (later - earlier));
     }
 
+    // write log
+    void ikcp_log(int mask, String fmt, Object... args)
+    {
+        if ((mask  & this.logmask) == 0)
+            return;
+        String str = String.format(fmt, args);
+        this.writelog(str, user);
+    }
+
+    // check log mask
+    int ikcp_canlog(int mask)
+    {
+        if ((mask & this.logmask) == 0)
+            return 0;
+        return 1;
+    }
+
+    // output segment
+    int ikcp_output(byte[] data,int offset)
+    {
+        if (ikcp_canlog(IKCP_LOG_OUTPUT) != 0) {
+            ikcp_log(IKCP_LOG_OUTPUT, "[RO] %ld bytes", (long)data.length);
+        }
+        if (data.length == 0)
+            return 0;
+        return this.output(data, offset);
+    }
+
+    // output queue
+    void ikcp_qprint(String name, List<Segment> list)
+    {
+        System.out.printf("<%s>: [", name);
+        for (Segment seg : list) {
+            System.out.printf("(%lu %d)", (long)seg.sn, (int)(seg.ts % 10000));
+            System.out.printf(",");
+        }
+        System.out.printf("]\n");
+    }
+
+    // can be override
+    void writelog(String str, Object user){
+        System.out.println(str+", user:"+user);
+    }
+
     private class Segment {
 
         protected long conv = 0;
@@ -151,51 +212,59 @@ public abstract class KCPCopy {
 
 
     long conv = 0;
-    //long user = user;
+    long mtu = IKCP_MTU_DEF;
+    long mss = this.mtu - IKCP_OVERHEAD;
+    long state = 0;
+
     long snd_una = 0;
     long snd_nxt = 0;
     long rcv_nxt = 0;
+
     long ts_recent = 0;
     long ts_lastack = 0;
-    long ts_probe = 0;
-    long probe_wait = 0;
+    long ssthresh = IKCP_THRESH_INIT;
+
+    long rx_rttval = 0;
+    long rx_srtt = 0;
+    long rx_rto = IKCP_RTO_DEF;
+    long rx_minrto = IKCP_RTO_MIN;
+
     long snd_wnd = IKCP_WND_SND;
     long rcv_wnd = IKCP_WND_RCV;
     long rmt_wnd = IKCP_WND_RCV;
     long cwnd = 0;
-    long incr = 0;
     long probe = 0;
-    long mtu = IKCP_MTU_DEF;
-    long mss = this.mtu - IKCP_OVERHEAD;
-    byte[] buffer = new byte[(int) (mtu + IKCP_OVERHEAD) * 3];
+
+    long current = 0;
+    long interval = IKCP_INTERVAL;
+    long ts_flush = IKCP_INTERVAL;
+    long xmit = 0;
+//    IUINT32 nrcv_buf, nsnd_buf;
+//    IUINT32 nrcv_que, nsnd_que;
+    long nodelay = 0;
+    long updated = 0;
+    long ts_probe = 0;
+    long probe_wait = 0;
+    long dead_link = IKCP_DEADLINK;
+    long incr = 0;
     ArrayList<Segment> nrcv_buf = new ArrayList<>(128);
     ArrayList<Segment> nsnd_buf = new ArrayList<>(128);
     ArrayList<Segment> nrcv_que = new ArrayList<>(128);
     ArrayList<Segment> nsnd_que = new ArrayList<>(128);
-    long state = 0;
     ArrayList<Long> acklist = new ArrayList<>(128);
-    //long ackblock = 0;
     //long ackcount = 0;
-    long rx_srtt = 0;
-    long rx_rttval = 0;
-    long rx_rto = IKCP_RTO_DEF;
-    long rx_minrto = IKCP_RTO_MIN;
-    long current = 0;
-    long interval = IKCP_INTERVAL;
-    long ts_flush = IKCP_INTERVAL;
-    long nodelay = 0;
-    long updated = 0;
-    long logmask = 0;
-    long ssthresh = IKCP_THRESH_INIT;
+    //long ackblock = 0;
+
+    Object user;
+    byte[] buffer = new byte[(int) (mtu + IKCP_OVERHEAD) * 3];
     long fastresend = 0;
     long nocwnd = 0;
     boolean stream = false;
-    long xmit = 0;
-    long dead_link = IKCP_DEADLINK;
-    //long output = NULL;
+    int logmask = 0;
+    //long ikcp_output = NULL;
     //long writelog = NULL;
 
-    public KCPCopy(long conv_) {
+    public KCPC(long conv_) {
         conv = conv_;
     }
 
@@ -773,7 +842,7 @@ public abstract class KCPCopy {
         int offset = 0;
         for (int i = 0; i < count; i++) {
             if (offset + IKCP_OVERHEAD > mtu) {
-                output(buffer, offset);
+                ikcp_output(buffer, offset);
                 offset = 0;
             }
             // ikcp_ack_get
@@ -813,7 +882,7 @@ public abstract class KCPCopy {
         if ((probe & IKCP_ASK_SEND) != 0) {
             seg.cmd = IKCP_CMD_WASK;
             if (offset + IKCP_OVERHEAD > mtu) {
-                output(buffer, offset);
+                ikcp_output(buffer, offset);
                 offset = 0;
             }
             offset += seg.encode(buffer, offset);
@@ -824,7 +893,7 @@ public abstract class KCPCopy {
         if ((probe & IKCP_ASK_TELL) != 0) {
             seg.cmd = IKCP_CMD_WINS;
             if (offset + IKCP_OVERHEAD > mtu) {
-                output(buffer, offset);
+                ikcp_output(buffer, offset);
                 offset = 0;
             }
             offset += seg.encode(buffer, offset);
@@ -906,7 +975,7 @@ public abstract class KCPCopy {
 
                 int need = IKCP_OVERHEAD + segment.data.length;
                 if (offset + need >= mtu) {
-                    output(buffer, offset);
+                    ikcp_output(buffer, offset);
                     offset = 0;
                 }
 
@@ -924,7 +993,7 @@ public abstract class KCPCopy {
 
         // flash remain segments
         if (offset > 0) {
-            output(buffer, offset);
+            ikcp_output(buffer, offset);
         }
 
         // update ssthresh
@@ -999,47 +1068,49 @@ public abstract class KCPCopy {
     // schedule ikcp_update (eg. implementing an epoll-like mechanism,
     // or optimize ikcp_update when handling massive kcp connections)
     //---------------------------------------------------------------------
-    long ikcp_check(long current)
+    long Check(long current_)
     {
-        long ts_flush = this.ts_flush;
+        long ts_flush_ = ts_flush;
         long tm_flush = 0x7fffffff;
         long tm_packet = 0x7fffffff;
-        long minimal = 0;
-        //struct IQUEUEHEAD *p;
+        long minimal;
 
-        if (updated == 0) {
-            return current;
+        if (0 == updated) {
+            return current_;
         }
 
-        if (_itimediff(current, ts_flush) >= 10000 ||
-                _itimediff(current, ts_flush) < -10000) {
-            ts_flush = current;
+        if (_itimediff(current_, ts_flush_) >= 10000 || _itimediff(current_, ts_flush_) < -10000) {
+            ts_flush_ = current_;
         }
 
-        if (_itimediff(current, ts_flush) >= 0) {
-            return current;
+        if (_itimediff(current_, ts_flush_) >= 0) {
+            return current_;
         }
 
-        tm_flush = _itimediff(ts_flush, current);
+        tm_flush = _itimediff(ts_flush_, current_);
 
         for (Segment seg : nsnd_buf) {
-            long diff = _itimediff(seg.resendts, current);
+            int diff = _itimediff(seg.resendts, current_);
             if (diff <= 0) {
-                return current;
+                return current_;
             }
-            if (diff < tm_packet) tm_packet = diff;
+            if (diff < tm_packet) {
+                tm_packet = diff;
+            }
         }
 
-        minimal = (long)(tm_packet < tm_flush ? tm_packet : tm_flush);
-        if (minimal >= interval) minimal = interval;
+        minimal = tm_packet < tm_flush ? tm_packet : tm_flush;
+        if (minimal >= interval) {
+            minimal = interval;
+        }
 
-        return current + minimal;
+        return current_ + minimal;
     }
 
 
 
-
-    int ikcp_setmtu(int mtu)
+    // change MTU size, default is 1400
+    int SetMtu(int mtu)
     {
         if (mtu < 50 || mtu < (int)IKCP_OVERHEAD)
             return -1;
@@ -1051,7 +1122,7 @@ public abstract class KCPCopy {
         return 0;
     }
 
-    int ikcp_interval(int interval)
+    int Interval(int interval)
     {
         if (interval > 5000) interval = 5000;
         else if (interval < 10) interval = 10;
@@ -1059,7 +1130,12 @@ public abstract class KCPCopy {
         return 0;
     }
 
-    int ikcp_nodelay(int nodelay, int interval, int resend, int nc)
+    // fastest: ikcp_nodelay(kcp, 1, 20, 2, 1)
+    // nodelay: 0:disable(default), 1:enable
+    // interval: internal update timer interval in millisec, default is 100ms
+    // resend: 0:disable fast resend(default), 1:enable fast resend
+    // nc: 0:normal congestion control(default), 1:disable congestion control
+    int NoDelay(int nodelay, int interval, int resend, int nc)
     {
         if (nodelay >= 0) {
             this.nodelay = nodelay;
@@ -1084,8 +1160,8 @@ public abstract class KCPCopy {
         return 0;
     }
 
-
-    int ikcp_wndsize(int sndwnd, int rcvwnd)
+    // set maximum window size: sndwnd=32, rcvwnd=32 by default
+    int WndSize(int sndwnd, int rcvwnd)
     {
         if (sndwnd > 0) {
             this.snd_wnd = sndwnd;
@@ -1096,7 +1172,8 @@ public abstract class KCPCopy {
         return 0;
     }
 
-    int ikcp_waitsnd()
+    // get how many packet is waiting to be sent
+    int WaitSnd()
     {
         return this.nsnd_buf.size() + this.nsnd_que.size();
     }

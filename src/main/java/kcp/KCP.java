@@ -18,7 +18,7 @@ import java.util.ArrayList;
 
 public abstract class KCP {
 
-    Logger logger = LoggerFactory.getLogger(KCP.class);
+//    https://github.com/hkspirt/kcp-java
 
     //=====================================================================
     // KCP BASIC
@@ -34,7 +34,7 @@ public abstract class KCP {
     public final int IKCP_ASK_SEND = 1;   // need to send IKCP_CMD_WASK
     public final int IKCP_ASK_TELL = 2;   // need to send IKCP_CMD_WINS
     public final int IKCP_WND_SND = 32;
-    public final int IKCP_WND_RCV = 32;
+    public final int IKCP_WND_RCV = 128;  // must >= max fragment size
     public final int IKCP_MTU_DEF = 1400;
     public final int IKCP_ACK_FAST = 3;
     public final int IKCP_INTERVAL = 100;
@@ -205,7 +205,7 @@ public abstract class KCP {
     long nocwnd = 0;
     long xmit = 0;
     long dead_link = IKCP_DEADLINK;
-    //long output = NULL;
+    //long ikcp_output = NULL;
     //long writelog = NULL;
 
     public KCP(long conv_) {
@@ -216,7 +216,7 @@ public abstract class KCP {
     // user/upper level recv: returns size, returns below zero for EAGAIN
     //---------------------------------------------------------------------
     // 将接收队列中的数据传递给上层引用
-    public int Recv(byte[] buffer) {//viewing
+    public int Recv(byte[] buffer) {
 
         if (0 == nrcv_que.size()) {
             return -1;
@@ -283,7 +283,7 @@ public abstract class KCP {
     //---------------------------------------------------------------------
     // check the size of next message in the recv queue
     // 计算接收队列中有多少可用的数据
-    public int PeekSize() {//viewed
+    public int PeekSize() {
         if (0 == nrcv_que.size()) {
             return -1;
         }
@@ -623,7 +623,7 @@ public abstract class KCP {
     //---------------------------------------------------------------------
     // ikcp_flush
     //---------------------------------------------------------------------
-    void flush() {//viewed
+    void flush() {
         long current_ = current;
         byte[] buffer_ = buffer;
         int change = 0;
@@ -832,7 +832,7 @@ public abstract class KCP {
     // ikcp_check when to call it again (without ikcp_input/_send calling).
     // 'current' - current timestamp in millisec.
     //---------------------------------------------------------------------
-    public void Update(long current_) {//viewed
+    public void Update(long current_) {
 
         current = current_;
 
@@ -978,8 +978,8 @@ public abstract class KCP {
             snd_wnd = (long) sndwnd;
         }
 
-        if (rcvwnd > 0) {
-            rcv_wnd = (long) rcvwnd;
+        if (rcvwnd > 0) {   // must >= max fragment size
+            rcv_wnd = _imax_(rcvwnd, IKCP_WND_RCV);
         }
         return 0;
     }
