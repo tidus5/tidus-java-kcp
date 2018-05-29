@@ -139,14 +139,14 @@ public abstract class KCPC {
     }
 
     // output segment
-    int ikcp_output(byte[] data,int offset)
+    int ikcp_output(byte[] data,int size)
     {
         if (ikcp_canlog(IKCP_LOG_OUTPUT) != 0) {
             ikcp_log(IKCP_LOG_OUTPUT, "[RO] %ld bytes", (long)data.length);
         }
         if (data.length == 0)
             return 0;
-        return this.output(data, offset);
+        return this.output(data, size);
     }
 
     // output queue
@@ -411,16 +411,15 @@ public abstract class KCPC {
         int len = buffer.length;
         if(stream != 0){
             if(nsnd_que.size() > 0){
-//                IKCPSEG *old = iqueue_entry(kcp->snd_queue.prev, IKCPSEG, node);
                 Segment old = nsnd_que.get(nsnd_que.size() - 1);
                 if (old.data.length < mss) {
                     int capacity = (int) (mss - old.data.length);
                     int extend = (len < capacity)? len : capacity;
                     Segment seg = new Segment(old.data.length + extend);
                     assert(seg != null);
-                    if (seg == null) {
-                        return -2;
-                    }
+//                    if (seg == null) {
+//                        return -2;
+//                    }
 
                     nsnd_que.add(seg);
                     System.arraycopy(old.data,0,seg.data,0,old.data.length);
@@ -544,7 +543,6 @@ public abstract class KCPC {
             return;
         }
 
-        int index = 0;
         for (Segment seg : nsnd_buf) {
             if (_itimediff(sn, seg.sn) < 0) {
                 break;
@@ -785,7 +783,6 @@ public abstract class KCPC {
 
     void flush() {//viewed
         long current_ = current;
-        byte[] buffer_ = buffer;
         int change = 0;
         int lost = 0;
 
@@ -803,16 +800,16 @@ public abstract class KCPC {
         // flush acknowledges
         // 将acklist中的ack发送出去
         int count = acklist.size() / 2;
-        int offset = 0;
+        int size = 0;
         for (int i = 0; i < count; i++) {
-            if (offset + IKCP_OVERHEAD > mtu) {
-                ikcp_output(buffer, offset);
-                offset = 0;
+            if (size + IKCP_OVERHEAD > mtu) {
+                ikcp_output(buffer, size);
+                size = 0;
             }
             // ikcp_ack_get
             seg.sn = acklist.get(i * 2 + 0);
             seg.ts = acklist.get(i * 2 + 1);
-            offset += seg.encode(buffer, offset);
+            size += seg.encode(buffer, size);
         }
         acklist.clear();
 
@@ -845,25 +842,25 @@ public abstract class KCPC {
         // 请求对端接收窗口
         if ((probe & IKCP_ASK_SEND) != 0) {
             seg.cmd = IKCP_CMD_WASK;
-            if (offset + IKCP_OVERHEAD > mtu) {
-                ikcp_output(buffer, offset);
-                offset = 0;
+            if (size + IKCP_OVERHEAD > mtu) {
+                ikcp_output(buffer, size);
+                size = 0;
             }
-            offset += seg.encode(buffer, offset);
+            size += seg.encode(buffer, size);
         }
 
         // flush window probing commands(c#)
         // 告诉对端自己的接收窗口
         if ((probe & IKCP_ASK_TELL) != 0) {
             seg.cmd = IKCP_CMD_WINS;
-            if (offset + IKCP_OVERHEAD > mtu) {
-                ikcp_output(buffer, offset);
-                offset = 0;
+            if (size + IKCP_OVERHEAD > mtu) {
+                ikcp_output(buffer, size);
+                size = 0;
             }
-            offset += seg.encode(buffer, offset);
+            size += seg.encode(buffer, size);
         }
 
-        probe = 0;
+        this.probe = 0;
 
         // calculate window size
         long cwnd_ = _imin_(snd_wnd, rmt_wnd);
@@ -938,15 +935,15 @@ public abstract class KCPC {
                 segment.una = rcv_nxt;
 
                 int need = IKCP_OVERHEAD + segment.data.length;
-                if (offset + need >= mtu) {
-                    ikcp_output(buffer, offset);
-                    offset = 0;
+                if (size + need >= mtu) {
+                    ikcp_output(buffer, size);
+                    size = 0;
                 }
 
-                offset += segment.encode(buffer, offset);
+                size += segment.encode(buffer, size);
                 if (segment.data.length > 0) {
-                    System.arraycopy(segment.data, 0, buffer, offset, segment.data.length);
-                    offset += segment.data.length;
+                    System.arraycopy(segment.data, 0, buffer, size, segment.data.length);
+                    size += segment.data.length;
                 }
 
                 if (segment.xmit >= dead_link) {
@@ -956,8 +953,8 @@ public abstract class KCPC {
         }
 
         // flash remain segments
-        if (offset > 0) {
-            ikcp_output(buffer, offset);
+        if (size > 0) {
+            ikcp_output(buffer, size);
         }
 
         // update ssthresh
@@ -1074,15 +1071,16 @@ public abstract class KCPC {
 
 
     // change MTU size, default is 1400
-    int SetMtu(int mtu)
+    int SetMtu(int mtu_)
     {
-        if (mtu < 50 || mtu < (int)IKCP_OVERHEAD)
+        if (mtu_ < 50 || mtu_ < IKCP_OVERHEAD)
             return -1;
-        this.mtu = mtu;
-        mss = mtu - IKCP_OVERHEAD;
-        byte[] buffer = new byte[(int) (mtu + IKCP_OVERHEAD) * 3];
-        if (buffer == null)
-            return -2;
+        byte[] buffer_ = new byte[(int) (mtu_ + IKCP_OVERHEAD) * 3];
+//        if (buffer_ == null)
+//            return -2;
+        this.mtu = (long) mtu_;
+        mss = mtu_ - IKCP_OVERHEAD;
+        this.buffer = buffer_;
         return 0;
     }
 
@@ -1147,7 +1145,7 @@ public abstract class KCPC {
     long ikcp_getconv(byte[] data, int offset)
     {
         long conv_ = ikcp_decode32u(data, offset);
-        return conv;
+        return conv_;
     }
 
 
