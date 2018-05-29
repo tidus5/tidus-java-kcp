@@ -213,55 +213,28 @@ public abstract class KCPC {
     }
 
 
-    long conv = 0;
-    long mtu = IKCP_MTU_DEF;
-    long mss = this.mtu - IKCP_OVERHEAD;
-    long state = 0;
-
-    long snd_una = 0;
-    long snd_nxt = 0;
-    long rcv_nxt = 0;
-
-    long ts_recent = 0;
-    long ts_lastack = 0;
-    long ssthresh = IKCP_THRESH_INIT;
-
-    long rx_rttval = 0;
-    long rx_srtt = 0;
-    long rx_rto = IKCP_RTO_DEF;
-    long rx_minrto = IKCP_RTO_MIN;
-
-    long snd_wnd = IKCP_WND_SND;
-    long rcv_wnd = IKCP_WND_RCV;
-    long rmt_wnd = IKCP_WND_RCV;
-    long cwnd = 0;
-    long probe = 0;
-
-    long current = 0;
-    long interval = IKCP_INTERVAL;
-    long ts_flush = IKCP_INTERVAL;
-    long xmit = 0;
-//    IUINT32 nrcv_buf, nsnd_buf;
-//    IUINT32 nrcv_que, nsnd_que;
-    long nodelay = 0;
-    long updated = 0;
-    long ts_probe = 0;
-    long probe_wait = 0;
-    long dead_link = IKCP_DEADLINK;
-    long incr = 0;
-    ArrayList<Segment> nrcv_buf = new ArrayList<>(128);
-    ArrayList<Segment> nsnd_buf = new ArrayList<>(128);
-    ArrayList<Segment> nrcv_que = new ArrayList<>(128);
-    ArrayList<Segment> nsnd_que = new ArrayList<>(128);
-    ArrayList<Long> acklist = new ArrayList<>(128);
-    //long ackcount = 0;
+    long conv, mtu, mss, state;
+    long snd_una, snd_nxt, rcv_nxt;
+    long ts_recent, ts_lastack, ssthresh;
+    long rx_rttval, rx_srtt, rx_rto, rx_minrto;
+    long snd_wnd, rcv_wnd, rmt_wnd, cwnd, probe;
+    long current, interval, ts_flush, xmit;
+    long nrcv_buf, nsnd_buf;
+    long nrcv_que, nsnd_que;
+    long nodelay, updated;
+    long ts_probe, probe_wait;
+    long dead_link, incr;
+    ArrayList<Segment> snd_queue;
+    ArrayList<Segment> rcv_queue;
+    ArrayList<Segment> snd_buf;
+    ArrayList<Segment> rcv_buf;
+    ArrayList<Long> acklist;
+    //long ackcount = 0;    //用于计算 acklist 当前长度和可容纳长度的，java不需要
     //long ackblock = 0;
-
     Object user;
-    byte[] buffer = new byte[(int) (mtu + IKCP_OVERHEAD) * 3];
-    long fastresend = 0;
-    long nocwnd = 0;
-    int stream = 0;
+    byte[] buffer;
+    long fastresend;
+    long nocwnd, stream;
     int logmask = 0;
     //long ikcp_output = NULL;
     //long writelog = NULL;
@@ -269,7 +242,54 @@ public abstract class KCPC {
     public KCPC(long conv, Object user) {
         this.conv = conv;
         this.user = user;
+        this.snd_una = 0;
+        this.snd_nxt = 0;
+        this.rcv_nxt = 0;
+        this.ts_recent = 0;
+        this.ts_lastack = 0;
+        this.ts_probe = 0;
+        this.probe_wait = 0;
+        this.snd_wnd = IKCP_WND_SND;
+        this.rcv_wnd = IKCP_WND_RCV;
+        this.rmt_wnd = IKCP_WND_RCV;
+        this.cwnd = 0;
+        this.incr = 0;
+        this.probe = 0;
+        this.mtu = IKCP_MTU_DEF;
+        this.mss = this.mtu - IKCP_OVERHEAD;
+        this.stream = 0;
 
+        this.buffer = new byte[(int) (mtu + IKCP_OVERHEAD) * 3];
+
+        this.snd_queue = new ArrayList<>(128);
+        this.rcv_queue = new ArrayList<>(128);
+        this.snd_buf = new ArrayList<>(128);
+        this.rcv_buf = new ArrayList<>(128);
+        this.nrcv_buf = 0;
+        this.nsnd_buf = 0;
+        this.nrcv_que = 0;
+        this.nsnd_que = 0;
+        this.state = 0;
+        this.acklist = new ArrayList<>(128);
+        //this.ackcount = 0;
+        //this.ackblock = 0;
+        this.rx_srtt = 0;
+        this.rx_rttval = 0;
+        this.rx_rto = IKCP_RTO_DEF;
+        this.rx_minrto = IKCP_RTO_MIN;
+        this.current = 0;
+        this.interval = IKCP_INTERVAL;
+        this.ts_flush = IKCP_INTERVAL;
+        this.nodelay = 0;
+        this.updated = 0;
+        this.logmask = 0;
+        this.ssthresh = IKCP_THRESH_INIT;
+        this.fastresend = 0;
+        this.nocwnd = 0;
+        this.xmit = 0;
+        this.dead_link = IKCP_DEADLINK;
+        //this.ikcp_output = NULL;
+        //this.writelog = NULL;
     }
 
     //////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -284,7 +304,7 @@ public abstract class KCPC {
         if (len < 0)
             len = -len;
 
-        if (0 == nrcv_que.size()) {
+        if (0 == rcv_queue.size()) {
             return -1;
         }
 
@@ -298,14 +318,14 @@ public abstract class KCPC {
         }
 
         boolean recover = false;
-        if (nrcv_que.size() >= rcv_wnd) {
+        if (rcv_queue.size() >= rcv_wnd) {
             recover = true;
         }
 
         // merge fragment.
         int count = 0;
         int inputLen = 0;
-        for (Segment seg : nrcv_que) {
+        for (Segment seg : rcv_queue) {
             if(buffer != null) {
                 System.arraycopy(seg.data, 0, buffer, inputLen, seg.data.length);
             }
@@ -325,17 +345,17 @@ public abstract class KCPC {
         if(ispeek == false) {
             //非peek，代表需要移除
             if (0 < count) {
-                slice(nrcv_que, count, nrcv_que.size());
+                slice(rcv_queue, count, rcv_queue.size());
             }
         }
 
         assert(inputLen == peekSize);
 
-        // move available data from rcv_buf -> nrcv_que
+        // move available data from rcv_buf -> rcv_queue
         count = 0;
-        for (Segment seg : nrcv_buf) {
-            if (seg.sn == rcv_nxt && nrcv_que.size() < rcv_wnd) {
-                nrcv_que.add(seg);
+        for (Segment seg : rcv_buf) {
+            if (seg.sn == rcv_nxt && rcv_queue.size() < rcv_wnd) {
+                rcv_queue.add(seg);
                 rcv_nxt++;
                 count++;
             } else {
@@ -344,11 +364,11 @@ public abstract class KCPC {
         }
 
         if (0 < count) {
-            slice(nrcv_buf, count, nrcv_buf.size());
+            slice(rcv_buf, count, rcv_buf.size());
         }
 
         // fast recover
-        if (nrcv_que.size() < rcv_wnd && recover) {
+        if (rcv_queue.size() < rcv_wnd && recover) {
             // ready to send back IKCP_CMD_WINS in ikcp_flush
             // tell remote my window size
             probe |= IKCP_ASK_TELL;
@@ -363,23 +383,23 @@ public abstract class KCPC {
     // check the size of next message in the recv queue
     // 计算接收队列中有多少可用的数据
     public int PeekSize() {//viewed
-        if (0 == nrcv_que.size()) {
+        if (0 == rcv_queue.size()) {
             return -1;
         }
 
-        Segment seq = nrcv_que.get(0);
+        Segment seq = rcv_queue.get(0);
 
         if (0 == seq.frg) {
             return seq.data.length;
         }
 
-        if (nrcv_que.size() < seq.frg + 1) {
+        if (rcv_queue.size() < seq.frg + 1) {
             return -1;
         }
 
         int length = 0;
 
-        for (Segment item : nrcv_que) {
+        for (Segment item : rcv_queue) {
             length += item.data.length;
             if (0 == item.frg) {
                 break;
@@ -410,8 +430,8 @@ public abstract class KCPC {
         int offset = 0;
         int len = buffer.length;
         if(stream != 0){
-            if(nsnd_que.size() > 0){
-                Segment old = nsnd_que.get(nsnd_que.size() - 1);
+            if(snd_queue.size() > 0){
+                Segment old = snd_queue.get(snd_queue.size() - 1);
                 if (old.data.length < mss) {
                     int capacity = (int) (mss - old.data.length);
                     int extend = (len < capacity)? len : capacity;
@@ -421,7 +441,7 @@ public abstract class KCPC {
 //                        return -2;
 //                    }
 
-                    nsnd_que.add(seg);
+                    snd_queue.add(seg);
                     System.arraycopy(old.data,0,seg.data,0,old.data.length);
 
                     if (buffer!=null) {
@@ -429,7 +449,7 @@ public abstract class KCPC {
                         offset += extend;
                     }
                     len -= extend;
-                    nsnd_que.remove(nsnd_que.size()-1);
+                    snd_queue.remove(snd_queue.size()-1);
                 }
             }
             if(len <= 0)
@@ -461,7 +481,7 @@ public abstract class KCPC {
             if(buffer != null && len > 0)
                 System.arraycopy(buffer, offset, seg.data, 0, size);
             seg.frg =(this.stream == 0)? (count - i - 1) : 0;
-            nsnd_que.add(seg);
+            snd_queue.add(seg);
             offset += size;
             length -= size;
         }
@@ -496,8 +516,8 @@ public abstract class KCPC {
 
     // 计算本地真实snd_una
     void shrink_buf() {
-        if (nsnd_buf.size() > 0) {
-            snd_una = nsnd_buf.get(0).sn;
+        if (snd_buf.size() > 0) {
+            snd_una = snd_buf.get(0).sn;
         } else {
             snd_una = snd_nxt;
         }
@@ -510,9 +530,9 @@ public abstract class KCPC {
         }
 
         int index = 0;
-        for (Segment seg : nsnd_buf) {
+        for (Segment seg : snd_buf) {
             if (sn == seg.sn) {
-                nsnd_buf.remove(index);
+                snd_buf.remove(index);
                 break;
             }
             index++;
@@ -525,7 +545,7 @@ public abstract class KCPC {
     // 通过对端传回的una将已经确认发送成功包从发送缓存中移除
     void parse_una(long una) {
         int count = 0;
-        for (Segment seg : nsnd_buf) {
+        for (Segment seg : snd_buf) {
             if (_itimediff(una, seg.sn) > 0) {
                 count++;
             } else {
@@ -534,7 +554,7 @@ public abstract class KCPC {
         }
 
         if (0 < count) {
-            slice(nsnd_buf, count, nsnd_buf.size());
+            slice(snd_buf, count, snd_buf.size());
         }
     }
 
@@ -543,7 +563,7 @@ public abstract class KCPC {
             return;
         }
 
-        for (Segment seg : nsnd_buf) {
+        for (Segment seg : snd_buf) {
             if (_itimediff(sn, seg.sn) < 0) {
                 break;
             }else if (sn != seg.sn) {
@@ -574,12 +594,12 @@ public abstract class KCPC {
             return;
         }
 
-        int n = nrcv_buf.size() - 1;
+        int n = rcv_buf.size() - 1;
         int after_idx = -1;
 
         // 判断是否是重复包，并且计算插入位置
         for (int i = n; i >= 0; i--) {
-            Segment seg = nrcv_buf.get(i);
+            Segment seg = rcv_buf.get(i);
             if (seg.sn == sn) {
                 repeat = true;
                 break;
@@ -594,18 +614,18 @@ public abstract class KCPC {
         // 如果不是重复包，则插入
         if (!repeat) {
             if (after_idx == -1) {
-                nrcv_buf.add(0, newseg);
+                rcv_buf.add(0, newseg);
             } else {
-                nrcv_buf.add(after_idx + 1, newseg);
+                rcv_buf.add(after_idx + 1, newseg);
             }
         }
 
-        // move available data from nrcv_buf -> nrcv_que
+        // move available data from rcv_buf -> rcv_queue
         // 将连续包加入到接收队列
         int count = 0;
-        for (Segment seg : nrcv_buf) {
-            if (seg.sn == rcv_nxt && nrcv_que.size() < rcv_wnd) {
-                nrcv_que.add(seg);
+        for (Segment seg : rcv_buf) {
+            if (seg.sn == rcv_nxt && rcv_queue.size() < rcv_wnd) {
+                rcv_queue.add(seg);
                 rcv_nxt++;
                 count++;
             } else {
@@ -615,7 +635,7 @@ public abstract class KCPC {
 
         // 从接收缓存中移除
         if (0 < count) {
-            slice(nrcv_buf, count, nrcv_buf.size());
+            slice(rcv_buf, count, rcv_buf.size());
         }
     }
 
@@ -775,8 +795,8 @@ public abstract class KCPC {
 
     // 接收窗口可用大小
     int wnd_unused() {
-        if (nrcv_que.size() < rcv_wnd) {
-            return (int) (int) rcv_wnd - nrcv_que.size();
+        if (rcv_queue.size() < rcv_wnd) {
+            return (int) (int) rcv_wnd - rcv_queue.size();
         }
         return 0;
     }
@@ -871,7 +891,7 @@ public abstract class KCPC {
 
         count = 0;
         // move data from snd_queue to snd_buf
-        for (Segment nsnd_que1 : nsnd_que) {
+        for (Segment nsnd_que1 : snd_queue) {
             if (_itimediff(snd_nxt, snd_una + cwnd_) >= 0) {
                 break;
             }
@@ -886,13 +906,13 @@ public abstract class KCPC {
             newseg.rto = rx_rto;
             newseg.fastack = 0;
             newseg.xmit = 0;
-            nsnd_buf.add(newseg);
+            snd_buf.add(newseg);
             snd_nxt++;
             count++;
         }
 
         if (0 < count) {
-            slice(nsnd_que, count, nsnd_que.size());
+            slice(snd_queue, count, snd_queue.size());
         }
 
         // calculate resent
@@ -900,7 +920,7 @@ public abstract class KCPC {
         long rtomin = (nodelay == 0) ? (rx_rto >> 3) : 0;
 
         // flush data segments
-        for (Segment segment : nsnd_buf) {
+        for (Segment segment : snd_buf) {
             boolean needsend = false;
             if (0 == segment.xmit) {
                 // 第一次传输
@@ -1050,7 +1070,7 @@ public abstract class KCPC {
 
         tm_flush = _itimediff(ts_flush_, current_);
 
-        for (Segment seg : nsnd_buf) {
+        for (Segment seg : snd_buf) {
             int diff = _itimediff(seg.resendts, current_);
             if (diff <= 0) {
                 return current_;
@@ -1137,7 +1157,7 @@ public abstract class KCPC {
     // get how many packet is waiting to be sent
     int WaitSnd()
     {
-        return this.nsnd_buf.size() + this.nsnd_que.size();
+        return this.snd_buf.size() + this.snd_queue.size();
     }
 
 
