@@ -1,7 +1,6 @@
 package kcp;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 public abstract class KCPC {
 
@@ -50,30 +49,30 @@ public abstract class KCPC {
     protected abstract int output(byte[] buffer, int size); // 需具体实现
 
     //采用小端编码： https://github.com/skywind3000/kcp/issues/53
-    // encode 8 bits unsigned int
+    /** encode 8 bits unsigned int*/
     public static void ikcp_encode8u(byte[] p, int offset, byte c) {
         p[0 + offset] = c;
     }
 
-    // decode 8 bits unsigned int
+    /** decode 8 bits unsigned int*/
     public static byte ikcp_decode8u(byte[] p, int offset) {
         return p[0 + offset];
     }
 
-    /* encode 16 bits unsigned int (msb) */
+    /** encode 16 bits unsigned int (msb) */
     public static void ikcp_encode16u(byte[] p, int offset, int w) {
         p[offset + 0] = (byte)(w & 0xff);
         p[offset + 1] = (byte)((w >>> 8) & 0xff);
     }
 
-    /* decode 16 bits unsigned int (msb) */
+    /** decode 16 bits unsigned int (msb) */
     public static int ikcp_decode16u(byte[] p, int offset) {
         int x1 = ((int)p[offset + 0]) & 0xff;
         int x2 = ((int)p[offset + 1]) & 0xff;
         return ((x2 << 8) | x1) & 0xffff;
     }
 
-    /* encode 32 bits unsigned int (msb) */
+    /** encode 32 bits unsigned int (msb) */
     public static void ikcp_encode32u(byte[] p, int offset, long l) {
         p[offset + 0] = (byte)(l & 0xff);
         p[offset + 1] = (byte)((l >>> 8) & 0xff);
@@ -81,7 +80,7 @@ public abstract class KCPC {
         p[offset + 3] = (byte)((l >>> 24) & 0xff);
     }
 
-    /* decode 32 bits unsigned int (msb) */
+    /** decode 32 bits unsigned int (msb) */
     public static long ikcp_decode32u(byte[] p, int offset) {
         int x1 = ((int)p[offset + 0]) & 0xff;
         int x2 = ((int)p[offset + 1]) & 0xff;
@@ -184,10 +183,12 @@ public abstract class KCPC {
             this.data = new byte[size];
         }
 
-        //---------------------------------------------------------------------
-        // ikcp_encode_seg
-        //---------------------------------------------------------------------
-        // encode a segment into buffer
+        /**---------------------------------------------------------------------
+        * ikcp_encode_seg
+        *
+        * encode a segment into buffer
+        * ---------------------------------------------------------------------
+        */
         protected int encode(byte[] ptr, int offset) {
             int offset_ = offset;
 
@@ -224,10 +225,10 @@ public abstract class KCPC {
     long nodelay, updated;
     long ts_probe, probe_wait;
     long dead_link, incr;
-    ArrayList<Segment> snd_queue;
-    ArrayList<Segment> rcv_queue;
-    ArrayList<Segment> snd_buf;
-    ArrayList<Segment> rcv_buf;
+    Deque<Segment> snd_queue;
+    Deque<Segment> rcv_queue;
+    Deque<Segment> snd_buf;
+    Deque<Segment> rcv_buf;
     List<Long> acklist;
     //long ackcount = 0;    //用于计算 acklist 当前长度和可容纳长度的，java不需要
     //long ackblock = 0;
@@ -261,10 +262,10 @@ public abstract class KCPC {
 
         this.buffer = new byte[(int) (mtu + IKCP_OVERHEAD) * 3];
 
-        this.snd_queue = new ArrayList<>(128);
-        this.rcv_queue = new ArrayList<>(128);
-        this.snd_buf = new ArrayList<>(128);
-        this.rcv_buf = new ArrayList<>(128);
+        this.snd_queue = new LinkedList<>();
+        this.rcv_queue = new LinkedList<>();
+        this.snd_buf = new LinkedList<>();
+        this.rcv_buf = new LinkedList<>();
         this.nrcv_buf = 0;
         this.nsnd_buf = 0;
         this.nrcv_que = 0;
@@ -292,15 +293,14 @@ public abstract class KCPC {
         //this.writelog = NULL;
     }
 
-    //////////////////////////////////////////////////////////////////////////////////////////////////////
-
-    //---------------------------------------------------------------------
-    // user/upper level recv: returns size, returns below zero for EAGAIN
-    //---------------------------------------------------------------------
-    // 将接收队列中的数据传递给上层引用
+    /**---------------------------------------------------------------------
+     * user/upper level recv: returns size, returns below zero for EAGAIN
+     * 将接收队列中的数据传递给上层引用
+     * ---------------------------------------------------------------------
+     */
     public int Recv(byte[] buffer, int len) {
 
-        boolean ispeek = len < 0;
+        int ispeek = (len < 0)? 1 : 0;
         if (len < 0)
             len = -len;
 
@@ -323,94 +323,86 @@ public abstract class KCPC {
         }
 
         // merge fragment.
-        int count = 0;
-        int inputLen = 0;
-        for (Segment seg : rcv_queue) {
-            if(buffer != null) {
-                System.arraycopy(seg.data, 0, buffer, inputLen, seg.data.length);
-            }
+        len = 0;
+        for (Iterator<Segment> iter = rcv_queue.iterator();iter.hasNext();) {
+            Segment seg = iter.next();
 
-            inputLen += seg.data.length;
-            count++;
+            if(buffer != null) {
+                System.arraycopy(seg.data, 0, buffer, len, seg.data.length);
+                len += seg.data.length;
+            }
+            long fragment = seg.frg;
 
             if (ikcp_canlog(IKCP_LOG_RECV) != 0) {
                 ikcp_log(IKCP_LOG_RECV, "recv sn=%lu", seg.sn);
             }
-            if (0 == seg.frg) {
+
+            if(ispeek == 0) {
+                seg = null;
+                iter.remove();
+                this.nrcv_que--;
+            }
+
+            if (0 == fragment) {
                 break;
             }
         }
 
-
-        if(ispeek == false) {
-            //非peek，代表需要移除
-            if (0 < count) {
-                slice(rcv_queue, count, rcv_queue.size());
-            }
-        }
-
-        assert(inputLen == peekSize);
+        assert(len == peekSize);
 
         // move available data from rcv_buf -> rcv_queue
-        count = 0;
-        for (Segment seg : rcv_buf) {
-            if (seg.sn == rcv_nxt && rcv_queue.size() < rcv_wnd) {
-                rcv_queue.add(seg);
-                rcv_nxt++;
-                count++;
+        for(Iterator<Segment> iter = rcv_buf.iterator();iter.hasNext();){
+//        for (Segment seg : rcv_buf) {
+            Segment seg = iter.next();
+            if (seg.sn == this.rcv_nxt && this.nrcv_que < rcv_wnd) {
+                iter.remove();
+                this.nrcv_buf--;
+                this.rcv_queue.add(seg);    //插入失败则抛出IllegalStateException异常
+                this.nrcv_que++;
+                this.rcv_nxt++;
             } else {
                 break;
             }
         }
 
-        if (0 < count) {
-            slice(rcv_buf, count, rcv_buf.size());
-        }
-
         // fast recover
-        if (rcv_queue.size() < rcv_wnd && recover) {
+        if (this.nrcv_que < this.rcv_wnd && recover) {
             // ready to send back IKCP_CMD_WINS in ikcp_flush
             // tell remote my window size
             probe |= IKCP_ASK_TELL;
         }
 
-        return inputLen;
+        return len;
     }
 
-    //---------------------------------------------------------------------
-    // peek data size
-    //---------------------------------------------------------------------
-    // check the size of next message in the recv queue
-    // 计算接收队列中有多少可用的数据
-    public int PeekSize() {//viewed
-        if (0 == rcv_queue.size()) {
+    /**---------------------------------------------------------------------
+    * peek data size
+    * check the size of next message in the recv queue
+    * 计算接收队列中有多少可用的数据
+    * ---------------------------------------------------------------------
+    */
+    public int PeekSize() {
+        Segment seg = rcv_queue.peek(); // 返回队列头部的元素  如果队列为空，则返回null
+        if (seg == null) {
             return -1;
         }
 
-        Segment seq = rcv_queue.get(0);
-
-        if (0 == seq.frg) {
-            return seq.data.length;
+        if (seg.frg == 0) {
+            return seg.data.length;
         }
 
-        if (rcv_queue.size() < seq.frg + 1) {
+        if (this.nrcv_que < seg.frg + 1) {
             return -1;
         }
 
         int length = 0;
-
         for (Segment item : rcv_queue) {
             length += item.data.length;
-            if (0 == item.frg) {
+            if (item.frg == 0)
                 break;
-            }
         }
-
         return length;
     }
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
 
 
     //---------------------------------------------------------------------
@@ -430,12 +422,12 @@ public abstract class KCPC {
         int offset = 0;
         int len = buffer.length;
         if(stream != 0){
-            if(snd_queue.size() > 0){
-                Segment old = snd_queue.get(snd_queue.size() - 1);
-                if (old.data.length < mss) {
-                    int capacity = (int) (mss - old.data.length);
+            Segment old = snd_queue.peekLast(); //peekLast 队列为空时返回null
+            if(old != null){
+                if (old.data.length < this.mss) {
+                    int capacity = (int) (this.mss - old.data.length);
                     int extend = (len < capacity)? len : capacity;
-                    Segment seg = new Segment(old.data.length + extend);
+                    Segment seg = new Segment(old.data.length + extend);    //seg->len = old->len + extend;
                     assert(seg != null);
 //                    if (seg == null) {
 //                        return -2;
@@ -444,12 +436,13 @@ public abstract class KCPC {
                     snd_queue.add(seg);
                     System.arraycopy(old.data,0,seg.data,0,old.data.length);
 
-                    if (buffer!=null) {
-                        System.arraycopy(buffer,offset,seg.data,old.data.length,buffer.length);
+                    if (buffer != null) {
+                        System.arraycopy(buffer, 0, seg.data, old.data.length, extend);
                         offset += extend;
                     }
+                    seg.frg = 0;
                     len -= extend;
-                    snd_queue.remove(snd_queue.size()-1);
+                    snd_queue.pollLast();//弹出队列尾部元素,队列为空时返回null
                 }
             }
             if(len <= 0)
