@@ -5,7 +5,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.CharsetUtil;
-import io.netty.util.internal.ThreadLocalRandom;
 
 public class UdpServerHandler extends SimpleChannelInboundHandler<DatagramPacket> {
 

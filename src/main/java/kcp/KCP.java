@@ -11,9 +11,6 @@
 //=====================================================================
 package kcp;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 
 public abstract class KCP {
@@ -90,7 +87,7 @@ public abstract class KCP {
     /**
      * 只保留 start 到 stop 的几个元素
      */
-    public static void slice(ArrayList list, int start, int stop) {
+    public static <E> void slice(ArrayList<E> list, int start, int stop) {
         int size = list.size();
         for (int i = 0; i < size; ++i) {
             if (i < stop - start) {

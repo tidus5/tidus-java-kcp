@@ -90,20 +90,6 @@ public abstract class KCPC {
         return ((long)x5) & 0xffffffff;
     }
 
-    /**
-     * 只保留 start 到 stop 的几个元素
-     */
-    public static void slice(ArrayList list, int start, int stop) {
-        int size = list.size();
-        for (int i = 0; i < size; ++i) {
-            if (i < stop - start) {
-                list.set(i, list.get(i + start));
-            } else {
-                list.remove(stop - start);
-            }
-        }
-    }
-
     static long _imin_(long a, long b) {
         return a <= b ? a : b;
     }
@@ -220,8 +206,8 @@ public abstract class KCPC {
     long rx_rttval, rx_srtt, rx_rto, rx_minrto;
     long snd_wnd, rcv_wnd, rmt_wnd, cwnd, probe;
     long current, interval, ts_flush, xmit;
-    long nrcv_buf, nsnd_buf;
-    long nrcv_que, nsnd_que;
+//    long nrcv_buf, nsnd_buf;
+//    long nrcv_que, nsnd_que;
     long nodelay, updated;
     long ts_probe, probe_wait;
     long dead_link, incr;
@@ -266,10 +252,10 @@ public abstract class KCPC {
         this.rcv_queue = new LinkedList<>();
         this.snd_buf = new LinkedList<>();
         this.rcv_buf = new LinkedList<>();
-        this.nrcv_buf = 0;
-        this.nsnd_buf = 0;
-        this.nrcv_que = 0;
-        this.nsnd_que = 0;
+//        this.nrcv_buf = 0;
+//        this.nsnd_buf = 0;
+//        this.nrcv_que = 0;
+//        this.nsnd_que = 0;
         this.state = 0;
         this.acklist = new ArrayList<>(8);
         //this.ackcount = 0;
@@ -340,10 +326,9 @@ public abstract class KCPC {
             if(ispeek == 0) {
                 seg = null;
                 iter.remove();
-                this.nrcv_que--;
             }
 
-            if (0 == fragment) {
+            if (fragment == 0) {
                 break;
             }
         }
@@ -352,13 +337,10 @@ public abstract class KCPC {
 
         // move available data from rcv_buf -> rcv_queue
         for(Iterator<Segment> iter = rcv_buf.iterator();iter.hasNext();){
-//        for (Segment seg : rcv_buf) {
             Segment seg = iter.next();
-            if (seg.sn == this.rcv_nxt && this.nrcv_que < rcv_wnd) {
+            if (seg.sn == this.rcv_nxt && this.rcv_queue.size() < rcv_wnd) {
                 iter.remove();
-                this.nrcv_buf--;
-                this.rcv_queue.add(seg);    //插入失败则抛出IllegalStateException异常
-                this.nrcv_que++;
+                this.rcv_queue.add(seg);
                 this.rcv_nxt++;
             } else {
                 break;
@@ -366,7 +348,7 @@ public abstract class KCPC {
         }
 
         // fast recover
-        if (this.nrcv_que < this.rcv_wnd && recover) {
+        if (this.rcv_queue.size() < this.rcv_wnd && recover) {
             // ready to send back IKCP_CMD_WINS in ikcp_flush
             // tell remote my window size
             probe |= IKCP_ASK_TELL;
@@ -391,7 +373,7 @@ public abstract class KCPC {
             return seg.data.length;
         }
 
-        if (this.nrcv_que < seg.frg + 1) {
+        if (this.rcv_queue.size() < seg.frg + 1) {
             return -1;
         }
 
@@ -409,9 +391,7 @@ public abstract class KCPC {
     // user/upper level send, returns below zero for error
     //---------------------------------------------------------------------
     // 上层要发送的数据丢给发送队列，发送队列会根据mtu大小分片
-    public int Send(byte[] buffer) {//viewing
-
-
+    public int Send(byte[] buffer) {
         assert(mss > 0);
 
         if (0 == buffer.length) {
@@ -509,8 +489,9 @@ public abstract class KCPC {
 
     // 计算本地真实snd_una
     void shrink_buf() {
-        if (snd_buf.size() > 0) {
-            snd_una = snd_buf.get(0).sn;
+        Segment seg = snd_buf.peekFirst();
+        if (seg != null) {
+            snd_una = seg.sn;
         } else {
             snd_una = snd_nxt;
         }
@@ -537,17 +518,13 @@ public abstract class KCPC {
 
     // 通过对端传回的una将已经确认发送成功包从发送缓存中移除
     void parse_una(long una) {
-        int count = 0;
-        for (Segment seg : snd_buf) {
+        for (Iterator<Segment> iter = snd_buf.iterator();iter.hasNext();) {
+            Segment seg = iter.next();
             if (_itimediff(una, seg.sn) > 0) {
-                count++;
+                iter.remove();
             } else {
                 break;
             }
-        }
-
-        if (0 < count) {
-            slice(snd_buf, count, snd_buf.size());
         }
     }
 
@@ -575,10 +552,12 @@ public abstract class KCPC {
         acklist.add(ts);
     }
 
-    //---------------------------------------------------------------------
-    // parse data
-    //---------------------------------------------------------------------
-    // 用户数据包解析
+    /**---------------------------------------------------------------------
+     * parse data
+     *
+     * 用户数据包解析
+     * ---------------------------------------------------------------------
+     */
     void parse_data(Segment newseg) {
         long sn = newseg.sn;
         boolean repeat = false;
@@ -587,48 +566,38 @@ public abstract class KCPC {
             return;
         }
 
-        int n = rcv_buf.size() - 1;
-        int after_idx = -1;
-
+        int i = rcv_buf.size() - 1; // 初始指向最后一个元素的下标位置
         // 判断是否是重复包，并且计算插入位置
-        for (int i = n; i >= 0; i--) {
-            Segment seg = rcv_buf.get(i);
+        for(Iterator<Segment> iter = rcv_buf.descendingIterator();iter.hasNext(); i--){
+            Segment seg = iter.next();
             if (seg.sn == sn) {
                 repeat = true;
                 break;
             }
 
             if (_itimediff(sn, seg.sn) > 0) {
-                after_idx = i;
                 break;
             }
         }
 
         // 如果不是重复包，则插入
         if (!repeat) {
-            if (after_idx == -1) {
-                rcv_buf.add(0, newseg);
-            } else {
-                rcv_buf.add(after_idx + 1, newseg);
-            }
+            //iqueue_add(&newseg->node, p);   //原版C代码，newseg添加在p后面。
+            // 这里下标i 就是p的位置，要插入p的后面，则下标应该为 i+1
+            ((LinkedList<Segment>)rcv_buf).add(i + 1, newseg);
         }
 
         // move available data from rcv_buf -> rcv_queue
         // 将连续包加入到接收队列
-        int count = 0;
-        for (Segment seg : rcv_buf) {
+        for(Iterator<Segment> iter = rcv_buf.iterator();iter.hasNext();){
+            Segment seg = iter.next();
             if (seg.sn == rcv_nxt && rcv_queue.size() < rcv_wnd) {
-                rcv_queue.add(seg);
-                rcv_nxt++;
-                count++;
+                iter.remove();// 从接收缓存中移除
+                this.rcv_queue.add(seg);
+                this.rcv_nxt++;
             } else {
                 break;
             }
-        }
-
-        // 从接收缓存中移除
-        if (0 < count) {
-            slice(rcv_buf, count, rcv_buf.size());
         }
     }
 
@@ -884,28 +853,24 @@ public abstract class KCPC {
 
         count = 0;
         // move data from snd_queue to snd_buf
-        for (Segment nsnd_que1 : snd_queue) {
+        for(Iterator<Segment> iter = snd_queue.iterator();iter.hasNext();){
             if (_itimediff(snd_nxt, snd_una + cwnd_) >= 0) {
                 break;
             }
-            Segment newseg = nsnd_que1;
-            newseg.conv = conv;
+            Segment newseg = iter.next();
+            newseg.conv = this.conv;
             newseg.cmd = IKCP_CMD_PUSH;
             newseg.wnd = seg.wnd;
             newseg.ts = current_;
             newseg.sn = snd_nxt;
             newseg.una = rcv_nxt;
             newseg.resendts = current_;
-            newseg.rto = rx_rto;
+            newseg.rto = this.rx_rto;
             newseg.fastack = 0;
             newseg.xmit = 0;
             snd_buf.add(newseg);
             snd_nxt++;
-            count++;
-        }
-
-        if (0 < count) {
-            slice(snd_queue, count, snd_queue.size());
+            iter.remove();
         }
 
         // calculate resent
