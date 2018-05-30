@@ -218,7 +218,7 @@ public abstract class KCPC {
     List<Long> acklist;
     //long ackcount = 0;    //用于计算 acklist 当前长度和可容纳长度的，java不需要
     //long ackblock = 0;
-    Object user;
+    public Object user;
     byte[] buffer;
     long fastresend;
     long nocwnd, stream;

@@ -13,6 +13,8 @@ import io.netty.channel.socket.DatagramPacket;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.util.CharsetUtil;
 import kcp.KCPC;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.Executors;
@@ -20,6 +22,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class TestNettyKCPConnection {
+
+    private static final Logger logger = LoggerFactory.getLogger(TestNettyKCPConnection.class);
+
     private KCPC kcp;
     private InetSocketAddress targetAddress;
     private Channel channel;
@@ -28,13 +33,11 @@ public class TestNettyKCPConnection {
 
     public TestNettyKCPConnection(int conversationId, String targetIp, int targetPort, int localPort) {
 
-        targetAddress = new InetSocketAddress(targetIp, targetPort);
-
-        kcp = new KCPC(conversationId, null) {
+        this.targetAddress = new InetSocketAddress(targetIp, targetPort);
+        this.kcp = new KCPC(conversationId, targetAddress) {
             // 设置发送消息底层方法
             @Override
             protected int output(byte[] buffer, int size) {
-                //根据回话id， 找到目标channel
                 Channel ch = channel;
                 if (ch != null && ch.isActive()) {
                     ByteBuf buf = Unpooled.wrappedBuffer(buffer, 0, size);
@@ -45,7 +48,7 @@ public class TestNettyKCPConnection {
         };
 
         Bootstrap b = new Bootstrap();
-        channel = b.group(new NioEventLoopGroup())
+        this.channel = b.group(new NioEventLoopGroup())
                 //都只能设置Allocator的类型，无法直接设置ByteBufAllocator分配的ByteBuf类型
                 .option(ChannelOption.ALLOCATOR, UnpooledByteBufAllocator.DEFAULT)
                 .channel(NioDatagramChannel.class)
@@ -85,7 +88,7 @@ public class TestNettyKCPConnection {
         int len = kcp.Recv(data, data.length);
         if (len > 0) {
             String str = new String(data, 0, len, CharsetUtil.UTF_8);
-            System.out.println("收到：" + str);
+            logger.info("收到来自"+kcp.user+"的消息：" + str);
         }
     }
 
@@ -114,6 +117,11 @@ public class TestNettyKCPConnection {
         while (true) {
             client.sendMessage("client say Hello".getBytes(CharsetUtil.UTF_8));
             server.sendMessage("server say Hello".getBytes(CharsetUtil.UTF_8));
+            try {
+                TimeUnit.SECONDS.sleep(1);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
 
 
