@@ -12,5 +12,5 @@ KCPC.java 基于以上项目进行修改
 4. 同步原版KCP的部分更新
 5. 部分变量名和语句优化
 
-
+添加 TestNettyKCPConnection 作为示例demo
 
