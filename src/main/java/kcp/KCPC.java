@@ -402,8 +402,8 @@ public abstract class KCPC {
         int offset = 0;
         int len = buffer.length;
         if(stream != 0){
-            Segment old = snd_queue.peekLast(); //peekLast 队列为空时返回null
-            if(old != null){
+            if(!snd_queue.isEmpty()){
+                Segment old = snd_queue.peekLast(); //peekLast 队列为空时返回null
                 if (old.data.length < this.mss) {
                     int capacity = (int) (this.mss - old.data.length);
                     int extend = (len < capacity)? len : capacity;
@@ -412,8 +412,6 @@ public abstract class KCPC {
 //                    if (seg == null) {
 //                        return -2;
 //                    }
-
-                    snd_queue.add(seg);
                     System.arraycopy(old.data,0,seg.data,0,old.data.length);
 
                     if (buffer != null) {
@@ -423,6 +421,7 @@ public abstract class KCPC {
                     seg.frg = 0;
                     len -= extend;
                     snd_queue.pollLast();//弹出队列尾部元素,队列为空时返回null
+                    snd_queue.add(seg);
                 }
             }
             if(len <= 0)
@@ -853,11 +852,8 @@ public abstract class KCPC {
 
         count = 0;
         // move data from snd_queue to snd_buf
-        for(Iterator<Segment> iter = snd_queue.iterator();iter.hasNext();){
-            if (_itimediff(snd_nxt, snd_una + cwnd_) >= 0) {
-                break;
-            }
-            Segment newseg = iter.next();
+        while (_itimediff(snd_nxt, snd_una + cwnd_) < 0) {
+            Segment newseg = snd_queue.poll();
             newseg.conv = this.conv;
             newseg.cmd = IKCP_CMD_PUSH;
             newseg.wnd = seg.wnd;
@@ -870,7 +866,6 @@ public abstract class KCPC {
             newseg.xmit = 0;
             snd_buf.add(newseg);
             snd_nxt++;
-            iter.remove();
         }
 
         // calculate resent
