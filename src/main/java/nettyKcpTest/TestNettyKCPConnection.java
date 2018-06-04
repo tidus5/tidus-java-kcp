@@ -85,10 +85,14 @@ public class TestNettyKCPConnection {
     }
 
     public void checkMessageRecieved() {
-        int len = kcp.Recv(data, data.length);
-        if (len > 0) {
-            String str = new String(data, 0, len, CharsetUtil.UTF_8);
-            logger.info("收到来自"+kcp.user+"的消息：" + str);
+        while(true) {
+            int len = kcp.Recv(data, data.length);
+            if (len > 0) {
+                String str = new String(data, 0, len, CharsetUtil.UTF_8);
+                logger.info("收到来自" + kcp.user + "的消息：" + str);
+            }else{
+                break;
+            }
         }
     }
 
